@@ -1,18 +1,19 @@
+# brain/tools/memory.py
 import os
 from datetime import datetime
 from langchain.tools import tool
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.documents import Document
 from dotenv import load_dotenv
 load_dotenv()
 
 class MemoryTool:
-    def __init__(self, collection: str = "gaon_memory"):  # ✅ 이름 고정
+    def __init__(self, collection: str = "gaon_memory"):
         self.collection = collection
-        self.embeddings = OllamaEmbeddings(
-            model=os.getenv("OLLAMA_EMBED_MODEL"),
-            base_url=os.getenv("OLLAMA_BASE_URL")
+        self.embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004",
+            google_api_key=os.getenv("GOOGLE_API_KEY")
         )
         self.db = Chroma(
             collection_name=self.collection,
@@ -21,7 +22,7 @@ class MemoryTool:
         )
 
     def save(self, user_input: str, answer: str):
-        name = os.getenv("VTUBER_NAME", "가온")  # ✅ 추가
+        name = os.getenv("VTUBER_NAME", "가온")
         self.db.add_documents([
             Document(
                 page_content=f"시청자: {user_input}\n{name}: {answer}",

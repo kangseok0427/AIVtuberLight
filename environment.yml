@@ -1,0 +1,25 @@
+name: vtuber
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - langchain
+    - langgraph
+    - langchain-chroma
+    - langchain-community
+    - langchain-google-genai
+    - langchain-groq
+    - chromadb
+    - edge-tts
+    - chzzkpy
+    - websockets
+    - pyaudio
+    - sounddevice
+    - soundfile
+    - numpy
+    - scipy
+    - python-dotenv
+    - ddgs

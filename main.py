@@ -1,32 +1,15 @@
 # main.py
 import asyncio
 import os
-import subprocess
 from dotenv import load_dotenv
 
 load_dotenv()
 
-NAME = os.getenv("VTUBER_NAME", "가온")
-
-def check_requirements():
-    """필수 프로그램 체크"""
-    import requests
-    
-    # Applio 체크
-    try:
-        requests.get("http://127.0.0.1:6969", timeout=2)
-        print("[✅] Applio 연결 확인")
-    except:
-        print("[❌] Applio가 켜져있지 않아요! 먼저 실행해주세요.")
-        return False
-
-    return True
+NAME = os.getenv("VTUBER_NAME")
 
 async def main():
-    if not check_requirements():
-        return
 
-    from brain.agent import agent, memory_tool, NAME, EMOTION_MAP, detect_emotion, update_obs, load_prompt
+    from brain.agent import agent, NAME, EMOTION_MAP, detect_emotion, update_obs, load_prompt
     from avatar.vtube_bridge import VTubeBridge
     from chat.reader import ChzzkReader
     from tts.tts import text_to_speech

@@ -4,34 +4,41 @@ import re
 import asyncio
 from dotenv import load_dotenv
 from typing import TypedDict, Literal, Annotated
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
-from brain.tools import SearchTool, GuidebookTool, MemoryTool
+from brain.tools import SearchTool, MemoryTool
 from tts.tts import text_to_speech
 
 load_dotenv()
 
-THINK_MODEL  = os.getenv("OLLAMA_THINK_MODEL")
-ANSWER_MODEL = os.getenv("OLLAMA_ANSWER_MODEL")
-BASE_URL     = os.getenv("OLLAMA_BASE_URL")
-NAME         = os.getenv("VTUBER_NAME")
-T_THINK      = float(os.getenv("VTUBER_THINK_TEMP"))
-T_ANSWER     = float(os.getenv("VTUBER_ANSWER_TEMP"))
+NAME     = os.getenv("VTUBER_NAME")
+T_THINK  = float(os.getenv("VTUBER_THINK_TEMP"))
+T_ANSWER = float(os.getenv("VTUBER_ANSWER_TEMP"))
 
 # 툴 인스턴스
-search_tool    = SearchTool().build()
-guidebook_tool = GuidebookTool().build()
-memory_tool    = MemoryTool()
-memory_search  = memory_tool.build()
-tools          = [search_tool, guidebook_tool, memory_search]
+search_tool   = SearchTool().build()
+memory_tool   = MemoryTool()
+memory_search = memory_tool.build()
+tools         = [search_tool, memory_search]
 
 # LLM
-llm_think            = ChatOllama(model=THINK_MODEL,  base_url=BASE_URL, temperature=T_THINK)
-llm_answer           = ChatOllama(model=ANSWER_MODEL, base_url=BASE_URL, temperature=T_ANSWER)
+llm_think  = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=T_THINK,
+    max_tokens=512,
+)
+llm_answer = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash",
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
+    temperature=T_ANSWER,
+    max_tokens=300,
+)
 llm_think_with_tools = llm_think.bind_tools(tools)
 
 # 프롬프트 로더
