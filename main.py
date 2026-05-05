@@ -1,6 +1,7 @@
 # main.py
 import asyncio
 import os
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,6 +14,7 @@ async def main():
     from avatar.vtube_bridge import VTubeBridge
     from chat.reader import ChzzkReader
     from tts.tts import text_to_speech
+    from control.telegram_bot import VTuberController
 
     bridge = VTubeBridge()
     await bridge.connect()
@@ -34,7 +36,6 @@ async def main():
         else:
             user_input = f"{nickname}: {content}"
 
-        # ✅ 별도 스레드에서 실행
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: agent.invoke({
             "user_input":       user_input,
@@ -63,6 +64,13 @@ async def main():
         on_subscription_callback=handle_subscription,
         topic=topic
     )
+
+    # 텔레그램 봇 별도 스레드로 실행
+    controller = VTuberController(reader=reader)
+    bot_thread = threading.Thread(target=controller.run, daemon=True)
+    bot_thread.start()
+    print("[✅] 텔레그램 봇 시작!")
+
     await reader.start()
 
 if __name__ == "__main__":

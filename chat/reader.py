@@ -1,10 +1,11 @@
 # chat/reader.py
 import asyncio
+import aiohttp
+import json
 import os
 import time
 import random
 from dotenv import load_dotenv
-from chzzkpy import ChatClient
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -15,6 +16,10 @@ NID_AUT    = os.getenv("CHZZK_NID_AUT")
 NID_SES    = os.getenv("CHZZK_NID_SES")
 EXPIRE_SEC = 30
 BUFFER_MAX = 20
+
+API_BASE   = "https://api.chzzk.naver.com"
+GAME_BASE  = "https://comm-api.game.naver.com/nng_main"
+WS_URL     = "wss://kr-ss1.chat.naver.com/chat"
 
 class ChzzkReader:
     def __init__(self, on_chat_callback, on_subscription_callback=None, topic: str = ""):
@@ -29,5 +34,159 @@ class ChzzkReader:
             temperature=0.1,
             max_tokens=10,
         )
-        self.client = ChatClient(CHANNEL_ID)
-        self.client.login(NID_AUT, NID_SES)
+        self.cookies = {
+            "NID_AUT": NID_AUT,
+            "NID_SES": NID_SES,
+        }
+        self.chat_channel_id = None
+        self.access_token    = None
+
+    async def _get_chat_channel_id(self, session: aiohttp.ClientSession) -> str:
+        url = f"{API_BASE}/service/v2/channels/{CHANNEL_ID}/live-detail"
+        async with session.get(url) as resp:
+            data = await resp.json()
+            return data["content"]["chatChannelId"]
+
+    async def _get_access_token(self, session: aiohttp.ClientSession) -> str:
+        url = f"{GAME_BASE}/v1/chats/access-token?channelId={self.chat_channel_id}&chatType=STREAMING"
+        async with session.get(url) as resp:
+            data = await resp.json()
+            return data["content"]["accessToken"]
+
+    async def _connect_websocket(self, session: aiohttp.ClientSession):
+        async with session.ws_connect(WS_URL) as ws:
+            print("[치지직] WebSocket 연결됨!")
+
+            connect_msg = {
+                "ver": "2",
+                "cmd": 100,
+                "svcid": "game",
+                "cid": self.chat_channel_id,
+                "bdy": {
+                    "uid": None,
+                    "devType": 2001,
+                    "accTkn": self.access_token,
+                    "auth": "READ"
+                },
+                "tid": 1
+            }
+            await ws.send_str(json.dumps(connect_msg))
+
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    await self._handle_message(json.loads(msg.data))
+                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                    print("[치지직] WebSocket 닫힘")
+                    break
+
+    async def _handle_message(self, data: dict):
+        cmd = data.get("cmd")
+
+        if cmd == 93101:
+            for chat in data.get("bdy", []):
+                try:
+                    profile  = json.loads(chat.get("profile", "{}"))
+                    nickname = profile.get("nickname", "익명")
+                    content  = chat.get("msg", "")
+                    if not content:
+                        return
+                    print(f"[채팅] {nickname}: {content}")
+                    if len(self.buffer) >= BUFFER_MAX:
+                        self.buffer.pop(0)
+                    self.buffer.append((nickname, content, time.time()))
+                except Exception as e:
+                    print(f"[채팅 파싱 오류] {e}")
+
+        elif cmd == 93102:
+            for donation in data.get("bdy", []):
+                try:
+                    profile  = json.loads(donation.get("profile", "{}"))
+                    nickname = profile.get("nickname", "익명")
+                    amount   = donation.get("extras", {}).get("payAmount", 0)
+                    content  = donation.get("msg", "")
+                    print(f"[도네] {nickname}: {amount}원 {content}")
+                    self.buffer.insert(0, (
+                        nickname,
+                        f"[도네 {amount}원] {content}" if content else f"[도네 {amount}원]",
+                        time.time()
+                    ))
+                except Exception as e:
+                    print(f"[도네 파싱 오류] {e}")
+
+    def _pick_by_topic_sync(self) -> tuple:
+        candidates = self.buffer[-5:]
+        chat_list = "\n".join(
+            f"{i+1}. {nick}: {content}"
+            for i, (nick, content, _) in enumerate(candidates)
+        )
+        system = SystemMessage(content="""You are a chat selector for a VTuber stream.
+Given a list of chat messages and a topic, select the most relevant message number.
+Respond with ONLY a single number. Nothing else.""")
+        human = HumanMessage(content=f"""Topic: {self.topic}
+
+Chat messages:
+{chat_list}
+
+Which message number is most relevant to the topic? Reply with just the number.""")
+        try:
+            response = self.llm.invoke([system, human])
+            idx = int(response.content.strip()) - 1
+            idx = max(0, min(idx, len(candidates) - 1))
+            return candidates[idx]
+        except:
+            return random.choice(candidates)
+
+    async def pick_and_respond(self):
+        while True:
+            await asyncio.sleep(0.5)
+
+            if self.is_busy or not self.buffer:
+                continue
+
+            now = time.time()
+            self.buffer = [
+                item for item in self.buffer
+                if now - item[2] <= EXPIRE_SEC
+            ]
+
+            if not self.buffer:
+                continue
+
+            if self.topic and len(self.buffer) > 1:
+                loop = asyncio.get_event_loop()
+                picked = await loop.run_in_executor(None, self._pick_by_topic_sync)
+            else:
+                picked = random.choice(self.buffer)
+
+            self.buffer.clear()
+            nickname, content, _ = picked
+            print(f"[응답 중] {nickname}: {content}")
+
+            self.is_busy = True
+            asyncio.create_task(self._run_callback(nickname, content))
+
+    async def _run_callback(self, nickname: str, content: str):
+        try:
+            await self.callback(nickname, content)
+        finally:
+            self.is_busy = False
+
+    async def _connect_with_retry(self):
+        """채널 ID, 토큰 발급 후 WebSocket 연결 (재시도 포함)"""
+        while True:
+            try:
+                async with aiohttp.ClientSession(cookies=self.cookies) as session:
+                    print("[치지직] 채팅 채널 ID 가져오는 중...")
+                    self.chat_channel_id = await self._get_chat_channel_id(session)
+                    print(f"[치지직] 채팅 채널 ID: {self.chat_channel_id}")
+                    self.access_token = await self._get_access_token(session)
+                    print(f"[치지직] 액세스 토큰 발급 완료")
+                    await self._connect_websocket(session)
+            except Exception as e:
+                print(f"[치지직] 연결 오류: {e}")
+                print("[치지직] 10초 후 재연결 시도...")
+                await asyncio.sleep(10)
+
+    async def start(self):
+        asyncio.create_task(self.pick_and_respond())
+        await self._connect_with_retry()

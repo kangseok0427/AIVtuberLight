@@ -27,19 +27,19 @@ memory_search = memory_tool.build()
 tools         = [search_tool, memory_search]
 
 # LLM
-llm_think  = ChatGroq(
+llm_think = ChatGroq(
     model="llama-3.3-70b-versatile",
     api_key=os.getenv("GROQ_API_KEY"),
     temperature=T_THINK,
-    max_tokens=512,
+    max_tokens=1024,
 )
 llm_answer = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
     temperature=T_ANSWER,
-    max_tokens=300,
+    max_tokens=1024,
 )
-llm_think_with_tools = llm_think.bind_tools(tools)
+llm_think_with_tools = llm_think.bind_tools(tools, parallel_tool_calls=False)
 
 # 프롬프트 로더
 def load_prompt(filename: str, **kwargs) -> str:

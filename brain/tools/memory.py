@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from langchain.tools import tool
 from langchain_chroma import Chroma
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from dotenv import load_dotenv
 load_dotenv()
@@ -11,9 +11,8 @@ load_dotenv()
 class MemoryTool:
     def __init__(self, collection: str = "gaon_memory"):
         self.collection = collection
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
-            google_api_key=os.getenv("GOOGLE_API_KEY")
+        self.embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
         )
         self.db = Chroma(
             collection_name=self.collection,

@@ -2,6 +2,7 @@
 import asyncio
 import os
 import re
+import tempfile
 import pyaudio
 import edge_tts
 import soundfile as sf
@@ -11,10 +12,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VOICE = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")
-PITCH = os.getenv("TTS_PITCH", "+20Hz")
-RATE  = os.getenv("TTS_RATE", "+5%")
-TTS_OUTPUT = "/tmp/tts_output.mp3"
+VOICE      = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")
+PITCH      = os.getenv("TTS_PITCH", "+20Hz")
+RATE       = os.getenv("TTS_RATE", "+5%")
+TTS_OUTPUT = os.path.join(tempfile.gettempdir(), "tts_output.mp3")
 
 def clean_text(text: str) -> str:
     text = re.sub(r'[^\uAC00-\uD7A3\u3131-\u318Ea-zA-Z0-9\s,.!?~]', '', text)
@@ -32,19 +33,24 @@ def find_device(name: str) -> int | None:
     return None
 
 def play_audio(path: str):
-    device_index = find_device("VB-Cable")
+    device_index = find_device("CABLE Input")
     if device_index is None:
         print("[TTS] VB-Cable 디바이스 없음!")
+        # 기본 출력으로 fallback
+        data, samplerate = sf.read(path, dtype='float32')
+        if data.ndim == 1:
+            data = np.stack([data, data], axis=1)
+        silence = np.zeros((int(samplerate * 0.8), 2), dtype=np.float32)
+        data = np.concatenate([data, silence], axis=0)
+        sd.play(data, samplerate)
+        sd.wait()
         return
 
     data, samplerate = sf.read(path, dtype='float32')
-
     if data.ndim == 1:
         data = np.stack([data, data], axis=1)
-
     silence = np.zeros((int(samplerate * 0.8), 2), dtype=np.float32)
     data = np.concatenate([data, silence], axis=0)
-
     sd.play(data, samplerate, device=device_index)
     sd.wait()
 
