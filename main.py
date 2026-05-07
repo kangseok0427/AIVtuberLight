@@ -3,6 +3,8 @@ import asyncio
 import os
 import threading
 from dotenv import load_dotenv
+import signal
+from brain.agent import agent, NAME, EMOTION_MAP, detect_emotion, update_obs, load_prompt
 
 load_dotenv()
 
@@ -10,11 +12,10 @@ NAME = os.getenv("VTUBER_NAME")
 
 async def main():
 
-    from brain.agent import agent, NAME, EMOTION_MAP, detect_emotion, update_obs, load_prompt
     from avatar.vtube_bridge import VTubeBridge
     from chat.reader import ChzzkReader
     from tts.tts import text_to_speech
-    from control.telegram_bot import VTuberController
+    from control.discord_bot import VTuberController
 
     bridge = VTubeBridge()
     await bridge.connect()
@@ -25,6 +26,9 @@ async def main():
     print(f"\n{'='*40}")
     print(f"  {NAME} 방송 시작!")
     print(f"{'='*40}\n")
+
+    # main_loop 가져오기
+    main_loop = asyncio.get_event_loop()
 
     async def handle_chat(nickname: str, content: str):
         if content.startswith("[도네"):
@@ -65,13 +69,19 @@ async def main():
         topic=topic
     )
 
-    # 텔레그램 봇 별도 스레드로 실행
-    controller = VTuberController(reader=reader)
+    controller = VTuberController(reader=reader, main_loop=main_loop)
     bot_thread = threading.Thread(target=controller.run, daemon=True)
     bot_thread.start()
-    print("[✅] 텔레그램 봇 시작!")
+    print("[✅] 디스코드 봇 시작!")
 
     await reader.start()
+
+    def handle_exit(signum, frame):
+        update_obs("😴 가온이 자는 중...")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, handle_exit)
+    signal.signal(signal.SIGTERM, handle_exit)
 
 if __name__ == "__main__":
     asyncio.run(main())

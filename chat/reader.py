@@ -1,6 +1,7 @@
 # chat/reader.py
 import asyncio
 import aiohttp
+import httpx
 import json
 import os
 import time
@@ -17,9 +18,9 @@ NID_SES    = os.getenv("CHZZK_NID_SES")
 EXPIRE_SEC = 30
 BUFFER_MAX = 20
 
-API_BASE   = "https://api.chzzk.naver.com"
-GAME_BASE  = "https://comm-api.game.naver.com/nng_main"
-WS_URL     = "wss://kr-ss1.chat.naver.com/chat"
+API_BASE  = "https://api.chzzk.naver.com"
+GAME_BASE = "https://comm-api.game.naver.com/nng_main"
+WS_URL    = "wss://kr-ss1.chat.naver.com/chat"
 
 class ChzzkReader:
     def __init__(self, on_chat_callback, on_subscription_callback=None, topic: str = ""):
@@ -41,43 +42,80 @@ class ChzzkReader:
         self.chat_channel_id = None
         self.access_token    = None
 
-    async def _get_chat_channel_id(self, session: aiohttp.ClientSession) -> str:
+    async def _get_chat_channel_id(self) -> str:
         url = f"{API_BASE}/service/v2/channels/{CHANNEL_ID}/live-detail"
-        async with session.get(url) as resp:
-            data = await resp.json()
-            return data["content"]["chatChannelId"]
+        print(f"[치지직] 채널 정보 요청 중...")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://chzzk.naver.com",
+        }
+        async with httpx.AsyncClient(
+            cookies=self.cookies,
+            headers=headers,
+            timeout=15,
+            follow_redirects=True
+        ) as client:
+            resp = await client.get(url)
+            print(f"[치지직] 응답 코드: {resp.status_code}")
+            data = resp.json()
+            channel_id = data["content"]["chatChannelId"]
+            print(f"[치지직] 채팅 채널 ID: {channel_id}")
+            return channel_id
 
-    async def _get_access_token(self, session: aiohttp.ClientSession) -> str:
+    async def _get_access_token(self) -> str:
         url = f"{GAME_BASE}/v1/chats/access-token?channelId={self.chat_channel_id}&chatType=STREAMING"
-        async with session.get(url) as resp:
-            data = await resp.json()
-            return data["content"]["accessToken"]
+        print(f"[치지직] 액세스 토큰 요청 중...")
+        async with httpx.AsyncClient(
+            cookies=self.cookies,
+            timeout=15,
+            follow_redirects=True
+        ) as client:
+            resp = await client.get(url)
+            data = resp.json()
+            token = data["content"]["accessToken"]
+            print(f"[치지직] 액세스 토큰 발급 완료")
+            return token
 
-    async def _connect_websocket(self, session: aiohttp.ClientSession):
-        async with session.ws_connect(WS_URL) as ws:
-            print("[치지직] WebSocket 연결됨!")
+    async def _connect_websocket(self) -> None:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(WS_URL) as ws:
+                print("[치지직] WebSocket 연결됨!")
 
-            connect_msg = {
-                "ver": "2",
-                "cmd": 100,
-                "svcid": "game",
-                "cid": self.chat_channel_id,
-                "bdy": {
-                    "uid": None,
-                    "devType": 2001,
-                    "accTkn": self.access_token,
-                    "auth": "READ"
-                },
-                "tid": 1
-            }
-            await ws.send_str(json.dumps(connect_msg))
+                connect_msg = {
+                    "ver": "2",
+                    "cmd": 100,
+                    "svcid": "game",
+                    "cid": self.chat_channel_id,
+                    "bdy": {
+                        "uid": None,
+                        "devType": 2001,
+                        "accTkn": self.access_token,
+                        "auth": "READ"
+                    },
+                    "tid": 1
+                }
+                await ws.send_str(json.dumps(connect_msg))
 
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._handle_message(json.loads(msg.data))
-                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                    print("[치지직] WebSocket 닫힘")
-                    break
+                # 핑 태스크 추가
+                async def ping_loop():
+                    while True:
+                        await asyncio.sleep(60)
+                        try:
+                            await ws.send_str(json.dumps({
+                                "ver": "2",
+                                "cmd": 0
+                            }))
+                        except:
+                            break
+
+                asyncio.create_task(ping_loop())
+
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        await self._handle_message(json.loads(msg.data))
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        print("[치지직] WebSocket 닫힘")
+                        break
 
     async def _handle_message(self, data: dict):
         cmd = data.get("cmd")
@@ -171,22 +209,16 @@ Which message number is most relevant to the topic? Reply with just the number."
         finally:
             self.is_busy = False
 
-    async def _connect_with_retry(self):
-        """채널 ID, 토큰 발급 후 WebSocket 연결 (재시도 포함)"""
-        while True:
-            try:
-                async with aiohttp.ClientSession(cookies=self.cookies) as session:
-                    print("[치지직] 채팅 채널 ID 가져오는 중...")
-                    self.chat_channel_id = await self._get_chat_channel_id(session)
-                    print(f"[치지직] 채팅 채널 ID: {self.chat_channel_id}")
-                    self.access_token = await self._get_access_token(session)
-                    print(f"[치지직] 액세스 토큰 발급 완료")
-                    await self._connect_websocket(session)
-            except Exception as e:
-                print(f"[치지직] 연결 오류: {e}")
-                print("[치지직] 10초 후 재연결 시도...")
-                await asyncio.sleep(10)
-
     async def start(self):
         asyncio.create_task(self.pick_and_respond())
-        await self._connect_with_retry()
+        first = True
+        while True:
+            try:
+                self.chat_channel_id = await self._get_chat_channel_id()
+                self.access_token    = await self._get_access_token()
+                await self._connect_websocket()
+            except Exception as e:
+                if first:
+                    first = False
+                print("[치지직] 재연결 중...")
+                await asyncio.sleep(10)

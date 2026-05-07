@@ -87,6 +87,7 @@ def update_obs(text: str):
         f.write(updated)
 
 # 노드 1 - think
+# 노드 1 - think
 def think_node(state: VTuberState) -> VTuberState:
     all_results = memory_tool.db.get()
     memory_context = ""
@@ -104,36 +105,54 @@ def think_node(state: VTuberState) -> VTuberState:
     user_content = state["user_input"] + memory_context
     human = HumanMessage(content=user_content)
     messages = [system, human]
-    response = llm_think_with_tools.invoke(messages)
+
+    try:
+        response = llm_think_with_tools.invoke(messages)
+    except Exception as e:
+        print(f"[⚠️] Think 툴 오류, 툴 없이 재시도: {e}")
+        response = llm_think.invoke(messages)
+
     return {**state, "messages": [system, human, response]}
 
 # 노드 2 - answer
 def answer_node(state: VTuberState) -> VTuberState:
-    system = SystemMessage(content=load_prompt("answer.txt", NAME=NAME))
+    try:
+        system = SystemMessage(content=load_prompt("answer.txt", NAME=NAME))
 
-    tool_results = ""
-    for msg in state["messages"]:
-        if hasattr(msg, "type") and msg.type == "tool":
-            tool_results += f"\n{msg.content}"
+        tool_results = ""
+        for msg in state["messages"]:
+            if hasattr(msg, "type") and msg.type == "tool":
+                tool_results += f"\n{msg.content}"
 
-    user_content = ""
-    for msg in state["messages"]:
-        if isinstance(msg, HumanMessage):
-            user_content = msg.content
-            break
+        user_content = ""
+        for msg in state["messages"]:
+            if isinstance(msg, HumanMessage):
+                user_content = msg.content
+                break
 
-    if tool_results:
-        user_content += f"\n\n[검색 결과]{tool_results}"
+        if tool_results:
+            user_content += f"\n\n[검색 결과]{tool_results}"
 
-    human = HumanMessage(content=user_content)
-    response = llm_answer.invoke([system, human])
-    answer = response.content
+        human = HumanMessage(content=user_content)
+        response = llm_answer.invoke([system, human])
+        answer = response.content
 
-    # 되묻기 처리
-    clarification = re.search(r'\[NEED_CLARIFICATION:(.*?)\]', answer)
-    if clarification:
-        question = clarification.group(1).strip()
-        answer = question + " [EMOTION:confused]"
+        # 되묻기 처리
+        clarification = re.search(r'\[NEED_CLARIFICATION:(.*?)\]', answer)
+        if clarification:
+            question = clarification.group(1).strip()
+            answer = question + " [EMOTION:confused]"
+
+    except Exception as e:
+        print(f"[⚠️] API 오류 (fallback 사용): {e}")
+        import random
+        answer = random.choice([
+            "잠깐, 나 지금 좀 바빠.. 🙄 [EMOTION:neutral]",
+            "음.. 지금은 대답하기 싫은데 💢 [EMOTION:angry]",
+            "나중에 물어봐.. 지금 생각하는 중이야 🤔 [EMOTION:thinking]",
+            "흥, 굳이 지금 대답해야 해? [EMOTION:neutral]",
+            "어.. 잠깐만 있어봐 💜 [EMOTION:nervous]",
+        ])
 
     emotion, clean_answer = detect_emotion(answer)
     vtube_expression = EMOTION_MAP.get(emotion, None)
