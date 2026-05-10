@@ -64,7 +64,6 @@ class ChzzkReader:
 
     async def _get_access_token(self) -> str:
         url = f"{GAME_BASE}/v1/chats/access-token?channelId={self.chat_channel_id}&chatType=STREAMING"
-        print(f"[치지직] 액세스 토큰 요청 중...")
         async with httpx.AsyncClient(
             cookies=self.cookies,
             timeout=15,
@@ -73,7 +72,6 @@ class ChzzkReader:
             resp = await client.get(url)
             data = resp.json()
             token = data["content"]["accessToken"]
-            print(f"[치지직] 액세스 토큰 발급 완료")
             return token
 
     async def _connect_websocket(self) -> None:
@@ -99,7 +97,7 @@ class ChzzkReader:
                 # 핑 태스크 추가
                 async def ping_loop():
                     while True:
-                        await asyncio.sleep(60)
+                        await asyncio.sleep(30)
                         try:
                             await ws.send_str(json.dumps({
                                 "ver": "2",
