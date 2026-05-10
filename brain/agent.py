@@ -2,6 +2,7 @@
 import os
 import re
 import asyncio
+import json
 from dotenv import load_dotenv
 from typing import TypedDict, Literal, Annotated
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -115,9 +116,28 @@ def think_node(state: VTuberState) -> VTuberState:
     return {**state, "messages": [system, human, response]}
 
 # 노드 2 - answer
+def load_snake_context() -> str:
+    try:
+        import json
+        with open("/Users/lucas/snake_ai/game_state.json", "r") as f:
+            state = json.load(f)
+        return load_prompt("snake.txt",
+            episode=state["episode"],
+            score=state["score"],
+            best_score=state["best_score"],
+            loss=round(state["loss"], 4),
+            epsilon=round(state["epsilon"], 2),
+            avg_score=state["avg_score"],
+            alive="살아있음" if state["alive"] else "죽음",
+            event=state.get("event", "null")
+        )
+    except:
+        return ""
+
 def answer_node(state: VTuberState) -> VTuberState:
     try:
-        system = SystemMessage(content=load_prompt("answer.txt", NAME=NAME))
+        snake_context = load_snake_context()
+        system = SystemMessage(content=load_prompt("answer.txt", NAME=NAME) + "\n\n" + snake_context)
 
         tool_results = ""
         for msg in state["messages"]:
@@ -137,7 +157,6 @@ def answer_node(state: VTuberState) -> VTuberState:
         response = llm_answer.invoke([system, human])
         answer = response.content
 
-        # 되묻기 처리
         clarification = re.search(r'\[NEED_CLARIFICATION:(.*?)\]', answer)
         if clarification:
             question = clarification.group(1).strip()
@@ -161,7 +180,6 @@ def answer_node(state: VTuberState) -> VTuberState:
     memory_tool.save(state["user_input"], clean_answer)
 
     return {**state, "answer": clean_answer, "emotion": emotion, "vtube_expression": vtube_expression}
-
 # 그래프 조립
 graph = StateGraph(VTuberState)
 graph.add_node("think",  think_node)
