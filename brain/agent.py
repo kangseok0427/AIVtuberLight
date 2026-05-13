@@ -38,7 +38,7 @@ llm_answer = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"),
     temperature=T_ANSWER,
-    max_tokens=1024,
+    max_tokens=4000,
 )
 llm_think_with_tools = llm_think.bind_tools(tools, parallel_tool_calls=False)
 
