@@ -15,6 +15,7 @@ LangGraph 에이전트
     ├── think_node (툴 호출 판단 · Groq)
     ├── tools (인터넷 검색 / 대화 메모리)
     └── answer_node (캐릭터 답변 생성 · Gemini Flash)
+        └── snake.txt (뱀 게임 AI 상태 실시간 주입)
     ↓
 감정 분류 → VTube Studio 표정 제어
     ↓
@@ -36,7 +37,7 @@ VTube Studio 립싱크 + OBS 자막 오버레이
 - VB-Cable → https://vb-audio.com/Cable
 
 ### API 키
-- Google AI Studio (Gemini Flash + 임베딩) → https://aistudio.google.com
+- Google AI Studio (Gemini Flash) → https://aistudio.google.com
 - Groq → https://console.groq.com
 
 ---
@@ -80,6 +81,10 @@ VTUBE_TOKEN=            # 첫 실행 시 자동 발급
 CHZZK_NID_AUT=          # 네이버 쿠키
 CHZZK_NID_SES=          # 네이버 쿠키
 CHZZK_CHANNEL_ID=       # 치지직 채널 ID
+
+# 디스코드 봇
+DISCORD_TOKEN=          # Discord Developer Portal에서 발급
+DISCORD_CHANNEL_ID=     # 제어용 채널 ID
 ```
 
 ### 4. 네이버 쿠키 확인 방법
@@ -89,9 +94,10 @@ CHZZK_CHANNEL_ID=       # 치지직 채널 ID
 4. `NID_AUT`, `NID_SES` 값 복사
 
 ### 5. 프롬프트 파일 생성
-`prompts/` 폴더에 아래 두 파일을 직접 작성:
+`prompts/` 폴더에 아래 파일들을 직접 작성:
 - `think.txt` → think 노드 시스템 프롬프트
 - `answer.txt` → answer 노드 (캐릭터 설정 포함) 시스템 프롬프트
+- `snake.txt` → 뱀 게임 AI 상태 컨텍스트 (선택)
 
 ---
 
@@ -121,13 +127,35 @@ Exp10 Nervous.exp3.json
 
 ## 📺 OBS 설정
 
-- 인코더: NVENC (Windows)
+- 인코더: NVENC (Windows) / Apple VT H.264 (Mac)
 - 비트레이트: 3000~4000 kbps
 - 해상도: 1280x720 / FPS: 30
 - 소스 추가:
   - 윈도우 캡처: VTube Studio
   - 브라우저 (로컬 파일): `obs/overlay.html`
   - 오디오 입력 캡처: VB-Cable
+
+---
+
+## 🤖 디스코드 봇 명령어
+
+### 기본
+| 명령어 | 설명 |
+|--------|------|
+| `/status` | 현재 상태 확인 |
+| `/clear` | 채팅 버퍼 비우기 |
+| `/topic [주제]` | 방송 주제 변경 |
+| `/stop` | 방송 종료 |
+
+### 발표 모드
+| 명령어 | 설명 |
+|--------|------|
+| `/present [PDF경로]` | PDF 발표 시작 |
+| `/pause` | 발표 일시정지 |
+| `/resume` | 발표 재개 |
+| `/qa` | 질문타임 시작 |
+| `/qa_end` | 질문타임 종료 |
+| `/stop_present` | 발표 종료 |
 
 ---
 
@@ -155,6 +183,7 @@ ai-vtuber/
 ├── environment.yml
 ├── brain/
 │   ├── agent.py
+│   ├── presenter.py
 │   └── tools/
 │       ├── __init__.py
 │       ├── search.py
@@ -163,13 +192,17 @@ ai-vtuber/
 │   └── vtube_bridge.py
 ├── chat/
 │   └── reader.py
+├── control/
+│   ├── __init__.py
+│   └── discord_bot.py
 ├── tts/
 │   └── tts.py
 ├── obs/
 │   └── overlay.html
 └── prompts/          # gitignore
     ├── think.txt
-    └── answer.txt
+    ├── answer.txt
+    └── snake.txt
 ```
 
 ---
@@ -184,6 +217,9 @@ ai-vtuber/
 
 **채팅이 안 읽힘**
 → `CHZZK_NID_AUT`, `CHZZK_NID_SES` 만료됐을 수 있음. 다시 발급.
+
+**치지직 WebSocket 자꾸 끊김**
+→ 자동 재연결 로직 있음. 핑 주기 30초로 설정되어 있음.
 
 **메모리 초기화**
 ```bash

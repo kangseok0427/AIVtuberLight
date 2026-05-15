@@ -34,11 +34,11 @@ llm_think = ChatGroq(
     temperature=T_THINK,
     max_tokens=1024,
 )
-llm_answer = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
+llm_answer = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    api_key=os.getenv("GROQ_API_KEY"),
     temperature=T_ANSWER,
-    max_tokens=4000,
+    max_tokens=1024,
 )
 llm_think_with_tools = llm_think.bind_tools(tools, parallel_tool_calls=False)
 
@@ -190,6 +190,7 @@ graph.set_entry_point("think")
 def should_use_tools(state: VTuberState) -> Literal["tools", "answer"]:
     last_msg = state["messages"][-1]
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        print(f"[도구 사용] {last_msg.tool_calls}")
         return "tools"
     return "answer"
 
