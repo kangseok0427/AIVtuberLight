@@ -27,10 +27,10 @@ class MemoryTool:
             persist_directory=".chroma"
         )
         self.llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",  # 70b → 8b로 교체
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=0.1,
-            max_tokens=512,
+            max_tokens=256,  # 512 → 256으로 줄이기
         )
 
     def _extract_nickname(self, user_input: str) -> str:
@@ -142,15 +142,11 @@ class MemoryTool:
         self._update_wiki(nickname, user_input, answer)
 
     def build(self):
-        db = self.db
         wiki_db = self.wiki_db
 
         @tool
         def memory_search(query: str) -> str:
-            """과거 대화 기록과 시청자 프로필에서 관련 맥락을 찾을 때 사용."""
-            short_results = db.similarity_search(query, k=3)
-
-            # 닉네임 추출해서 위키 정확하게 조회
+            """시청자 프로필과 과거 정보를 조회할 때 사용."""
             nickname = query.split(": ")[0].strip() if ": " in query else query
             try:
                 wiki_data = wiki_db.get(
@@ -162,20 +158,8 @@ class MemoryTool:
                 wiki_results = wiki_db.similarity_search(query, k=1)
                 wiki_text = wiki_results[0].page_content if wiki_results else ""
 
-            output = ""
-
-            if short_results:
-                output += "[최근 대화 기록]\n"
-                output += "\n".join(
-                    f"- [{r.metadata.get('timestamp', '')}] {r.page_content}"
-                    for r in short_results
-                )
-                output += "\n\n"
-
             if wiki_text:
-                output += "[참고 - 시청자 프로필]\n"
-                output += wiki_text
-
-            return output if output else "관련 기록이 없어요."
+                return f"[시청자 프로필]\n{wiki_text}"
+            return "관련 프로필 정보가 없어요."
 
         return memory_search

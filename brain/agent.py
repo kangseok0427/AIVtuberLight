@@ -5,12 +5,13 @@ import asyncio
 import json
 from dotenv import load_dotenv
 from typing import TypedDict, Literal, Annotated
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
+from brain.llm_config import get_think_llm, get_answer_llm
 
 from brain.tools import SearchTool, MemoryTool
 from tts.tts import text_to_speech
@@ -28,18 +29,8 @@ memory_search = memory_tool.build()
 tools         = [search_tool, memory_search]
 
 # LLM
-llm_think = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY"),
-    temperature=T_THINK,
-    max_tokens=1024,
-)
-llm_answer = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY"),
-    temperature=T_ANSWER,
-    max_tokens=1024,
-)
+llm_think = get_think_llm()
+llm_answer = get_answer_llm()
 llm_think_with_tools = llm_think.bind_tools(tools, parallel_tool_calls=False)
 
 # 프롬프트 로더
@@ -87,7 +78,6 @@ def update_obs(text: str):
     with open("obs/overlay.html", "w", encoding="utf-8") as f:
         f.write(updated)
 
-# 노드 1 - think
 # 노드 1 - think
 def think_node(state: VTuberState) -> VTuberState:
     all_results = memory_tool.db.get()
