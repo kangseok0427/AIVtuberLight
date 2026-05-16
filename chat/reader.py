@@ -4,6 +4,7 @@ import aiohttp
 import httpx
 import json
 import os
+import re
 import time
 import random
 from dotenv import load_dotenv
@@ -22,6 +23,14 @@ BUFFER_MAX = 20
 API_BASE  = "https://api.chzzk.naver.com"
 GAME_BASE = "https://comm-api.game.naver.com/nng_main"
 WS_URL    = "wss://kr-ss1.chat.naver.com/chat"
+
+def _is_emoji_only(text: str) -> bool:
+    # 치지직 이모티콘 {:xxx:} 제거
+    cleaned = re.sub(r'\{:[^}]+:\}', '', text).strip()
+    if not cleaned:
+        return True
+    # 한글 초성/중성/종성 전체 범위 + 영문 + 숫자 포함
+    return not bool(re.search(r'[ㄱ-ㅎㅏ-ㅣ가-힣a-zA-Z0-9]', cleaned))
 
 class ChzzkReader:
     def __init__(self, on_chat_callback, on_subscription_callback=None, topic: str = ""):
@@ -126,7 +135,12 @@ class ChzzkReader:
                     if not content:
                         return
 
-                    # ── 필터 체크 ──────────────────────────────
+                    # 이모티콘만 있는 채팅 필터
+                    if _is_emoji_only(content):
+                        print(f"[필터] 이모티콘: {nickname}: {content}")
+                        return
+
+                    # 욕설/스팸 필터
                     reason = check_chat(nickname, content)
                     if reason:
                         print(f"[필터] {nickname}: {content} ({reason})")
@@ -135,7 +149,6 @@ class ChzzkReader:
                                 self.controller.send_filter_alert(nickname, content, reason)
                             )
                         return
-                    # ───────────────────────────────────────────
 
                     print(f"[채팅] {nickname}: {content}")
                     if len(self.buffer) >= BUFFER_MAX:
@@ -190,14 +203,12 @@ Which message number is most relevant to the topic? Reply with just the number."
             if self.is_busy:
                 continue
 
-            # ── priority_buffer 먼저 처리 ──────────────────
             if self.priority_buffer:
                 nickname, content, _ = self.priority_buffer.pop(0)
                 print(f"[우선처리] {nickname}: {content}")
                 self.is_busy = True
                 asyncio.create_task(self._run_callback(nickname, content))
                 continue
-            # ───────────────────────────────────────────────
 
             if not self.buffer:
                 continue

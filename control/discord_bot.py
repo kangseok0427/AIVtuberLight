@@ -52,16 +52,19 @@ class VTuberController:
         self._setup()
 
     async def send_filter_alert(self, username: str, text: str, reason: str):
-        """필터 감지 시 디스코드 알람 전송"""
-        if self.channel:
-            embed = discord.Embed(
-                title="🚨 채팅 필터 감지",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="유저", value=username, inline=True)
-            embed.add_field(name="사유", value=reason, inline=True)
-            embed.add_field(name="내용", value=f"||{text}||", inline=False)  # 스포일러 처리
-            await self.channel.send(embed=embed)
+        if not self.channel:
+            return
+        embed = discord.Embed(
+            title="🚨 채팅 필터 감지",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="유저", value=username, inline=True)
+        embed.add_field(name="사유", value=reason, inline=True)
+        embed.add_field(name="내용", value=f"||{text}||", inline=False)
+        asyncio.run_coroutine_threadsafe(
+            self.channel.send(embed=embed),
+            self.bot.loop  # 봇 자체 루프 사용
+        )
 
     def _setup(self):
         reader = self.reader

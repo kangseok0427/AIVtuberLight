@@ -95,10 +95,14 @@ class MemoryTool:
             content = content.replace("```json", "").replace("```", "").strip()
 
             # { } 사이만 추출
-            start = content.index('{')
-            end   = content.rindex('}') + 1
-            json_str = content[start:end]
+            try:
+                start = content.index('{')
+                end   = content.rindex('}') + 1
+            except ValueError:
+                print(f"[Wiki] JSON 구조 없음, 스킵")
+                return
 
+            json_str = content[start:end]
             profile = json.loads(json_str)
 
             if not profile:
