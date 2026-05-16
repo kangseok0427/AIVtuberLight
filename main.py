@@ -2,16 +2,15 @@
 import asyncio
 import os
 import threading
-from dotenv import load_dotenv
 import signal
-from brain.agent import agent, NAME, EMOTION_MAP, detect_emotion, update_obs, load_prompt
+from dotenv import load_dotenv
+from brain.agent import agent, NAME, detect_emotion, update_obs
 
 load_dotenv()
 
 NAME = os.getenv("VTUBER_NAME")
 
 async def main():
-
     from avatar.vtube_bridge import VTubeBridge
     from chat.reader import ChzzkReader
     from tts.tts import text_to_speech
@@ -27,7 +26,6 @@ async def main():
     print(f"  {NAME} 방송 시작!")
     print(f"{'='*40}\n")
 
-    # main_loop 가져오기
     main_loop = asyncio.get_event_loop()
 
     async def handle_chat(nickname: str, content: str):
@@ -70,11 +68,11 @@ async def main():
     )
 
     controller = VTuberController(reader=reader, main_loop=main_loop)
+    reader.controller = controller  # 필터 알람용 역참조
+
     bot_thread = threading.Thread(target=controller.run, daemon=True)
     bot_thread.start()
     print("[✅] 디스코드 봇 시작!")
-
-    await reader.start()
 
     def handle_exit(signum, frame):
         update_obs("😴 가온이 자는 중...")
@@ -82,6 +80,8 @@ async def main():
 
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
+
+    await reader.start()
 
 if __name__ == "__main__":
     asyncio.run(main())

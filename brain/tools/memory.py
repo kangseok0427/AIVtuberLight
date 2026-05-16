@@ -27,10 +27,10 @@ class MemoryTool:
             persist_directory=".chroma"
         )
         self.llm = ChatGroq(
-            model="llama-3.1-8b-instant",  # 70b → 8b로 교체
+            model="llama-3.1-8b-instant",
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=0.1,
-            max_tokens=256,  # 512 → 256으로 줄이기
+            max_tokens=256,
         )
 
     def _extract_nickname(self, user_input: str) -> str:
@@ -39,7 +39,6 @@ class MemoryTool:
         return "익명"
 
     def _get_wiki(self, nickname: str) -> tuple[str, str | None]:
-        """시청자 위키 조회 → (내용, doc_id)"""
         try:
             results = self.wiki_db.get(
                 where={"nickname": nickname},
@@ -71,7 +70,8 @@ class MemoryTool:
 규칙:
 - 확실한 정보만 저장해
 - 기존 프로필과 충돌하면 최신 정보 우선
-- JSON 형식으로만 출력해
+- JSON 형식으로만 출력해. 앞뒤 설명 없이 JSON만.
+- 마크다운 코드블록(```) 사용 금지
 - 새로운 정보가 없으면 빈 JSON {} 출력""")
 
         human = HumanMessage(content=f"""기존 프로필:
@@ -91,20 +91,25 @@ class MemoryTool:
             if '{' not in content:
                 return
 
-            json_str = content[content.index('{'):content.rindex('}')+1]
+            # 코드블록 제거
+            content = content.replace("```json", "").replace("```", "").strip()
+
+            # { } 사이만 추출
+            start = content.index('{')
+            end   = content.rindex('}') + 1
+            json_str = content[start:end]
+
             profile = json.loads(json_str)
 
             if not profile:
                 return
 
-            # 기존 위키 삭제 (id로 정확하게)
             if existing_id:
                 try:
                     self.wiki_db.delete(ids=[existing_id])
                 except Exception as e:
                     print(f"[Wiki] 삭제 실패: {e}")
 
-            # 새 프로필 저장
             profile_text = f"시청자 {nickname} 프로필:\n"
             for k, v in profile.items():
                 profile_text += f"- {k}: {v}\n"

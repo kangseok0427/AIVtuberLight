@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
-from brain.llm_config import get_think_llm, get_answer_llm
+from brain.llm_config import get_think_llm, get_answer_llm, get_think_llm_with_tools
 
 from brain.tools import SearchTool, MemoryTool
 from tts.tts import text_to_speech
@@ -31,7 +31,7 @@ tools         = [search_tool, memory_search]
 # LLM
 llm_think = get_think_llm()
 llm_answer = get_answer_llm()
-llm_think_with_tools = llm_think.bind_tools(tools, parallel_tool_calls=False)
+llm_think_with_tools = get_think_llm_with_tools(llm_think, tools)
 
 # 프롬프트 로더
 def load_prompt(filename: str, **kwargs) -> str:

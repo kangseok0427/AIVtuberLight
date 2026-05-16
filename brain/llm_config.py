@@ -38,3 +38,9 @@ def get_answer_llm():
             temperature=float(os.getenv("VTUBER_ANSWER_TEMP")),
             max_tokens=1024,
         )
+
+def get_think_llm_with_tools(think_llm, tools):
+    if MODE == "school":
+        return think_llm.bind_tools(tools)
+    else:
+        return think_llm.bind_tools(tools, parallel_tool_calls=False)

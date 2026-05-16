@@ -9,6 +9,7 @@ import random
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
+from control.discord_bot import check_chat
 
 load_dotenv()
 
@@ -27,8 +28,10 @@ class ChzzkReader:
         self.callback              = on_chat_callback
         self.subscription_callback = on_subscription_callback
         self.buffer                = []
+        self.priority_buffer       = []
         self.is_busy               = False
         self.topic                 = topic
+        self.controller            = None
         self.llm                   = ChatGroq(
             model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY"),
@@ -94,15 +97,11 @@ class ChzzkReader:
                 }
                 await ws.send_str(json.dumps(connect_msg))
 
-                # 핑 태스크 추가
                 async def ping_loop():
                     while True:
                         await asyncio.sleep(30)
                         try:
-                            await ws.send_str(json.dumps({
-                                "ver": "2",
-                                "cmd": 0
-                            }))
+                            await ws.send_str(json.dumps({"ver": "2", "cmd": 0}))
                         except:
                             break
 
@@ -126,6 +125,18 @@ class ChzzkReader:
                     content  = chat.get("msg", "")
                     if not content:
                         return
+
+                    # ── 필터 체크 ──────────────────────────────
+                    reason = check_chat(nickname, content)
+                    if reason:
+                        print(f"[필터] {nickname}: {content} ({reason})")
+                        if self.controller:
+                            asyncio.create_task(
+                                self.controller.send_filter_alert(nickname, content, reason)
+                            )
+                        return
+                    # ───────────────────────────────────────────
+
                     print(f"[채팅] {nickname}: {content}")
                     if len(self.buffer) >= BUFFER_MAX:
                         self.buffer.pop(0)
@@ -176,7 +187,19 @@ Which message number is most relevant to the topic? Reply with just the number."
         while True:
             await asyncio.sleep(0.5)
 
-            if self.is_busy or not self.buffer:
+            if self.is_busy:
+                continue
+
+            # ── priority_buffer 먼저 처리 ──────────────────
+            if self.priority_buffer:
+                nickname, content, _ = self.priority_buffer.pop(0)
+                print(f"[우선처리] {nickname}: {content}")
+                self.is_busy = True
+                asyncio.create_task(self._run_callback(nickname, content))
+                continue
+            # ───────────────────────────────────────────────
+
+            if not self.buffer:
                 continue
 
             now = time.time()
