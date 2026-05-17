@@ -11,25 +11,18 @@ load_dotenv()
 DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
 
-# ─────────────────────────────────────────
-# 채팅 필터
-# ─────────────────────────────────────────
 FILTER_PATTERNS = [
-    # 한국어 욕설 (초성 포함)
     r"[시씨][0이발팔ㅂ]",
     r"[ㅅs][ㅣi][0o][ㅂb]",
     r"ㅅㅂ|ㅄ|ㄱㅅ|ㅈㄹ|ㄷㅊ",
     r"좆|보지|씹|잡년|창녀",
-    # 도배 감지 (같은 문자 5개 이상 반복)
     r"(.)\1{4,}",
-    # 스팸 URL
     r"https?://\S+\.(xyz|tk|ml|ga|cf)",
 ]
 
 COMPILED_FILTERS = [re.compile(p, re.IGNORECASE) for p in FILTER_PATTERNS]
 
 def check_chat(username: str, text: str) -> str | None:
-    """문제 있으면 사유 반환, 없으면 None"""
     for pattern in COMPILED_FILTERS:
         m = pattern.search(text)
         if m:
@@ -37,14 +30,12 @@ def check_chat(username: str, text: str) -> str | None:
     return None
 
 
-# ─────────────────────────────────────────
-# 컨트롤러
-# ─────────────────────────────────────────
 class VTuberController:
     def __init__(self, reader, main_loop: asyncio.AbstractEventLoop):
-        self.reader    = reader
-        self.main_loop = main_loop
-        self.channel   = None
+        self.reader     = reader
+        self.main_loop  = main_loop
+        self.channel    = None
+        self.presenter  = None
 
         intents = discord.Intents.default()
         intents.message_content = True
@@ -63,7 +54,7 @@ class VTuberController:
         embed.add_field(name="내용", value=f"||{text}||", inline=False)
         asyncio.run_coroutine_threadsafe(
             self.channel.send(embed=embed),
-            self.bot.loop  # 봇 자체 루프 사용
+            self.bot.loop
         )
 
     def _setup(self):
@@ -83,11 +74,8 @@ class VTuberController:
             if not text:
                 await ctx.send("사용법: /say [내용]")
                 return
-            
-            # priority_buffer에 직접 삽입 (callback 우회)
             import time
             reader.priority_buffer.append(("디스코드", text, time.time()))
-            
             await ctx.send(f"📢 우선 전달: `{text}`")
 
         @self.bot.command(name="status")
@@ -96,10 +84,12 @@ class VTuberController:
                 return
             buf  = len(reader.buffer)
             busy = "응답 중" if reader.is_busy else "대기 중"
+            presenting = f"발표 중 ({self.presenter.current}/{len(self.presenter.slides)}장)" if self.presenter and self.presenter.running else "없음"
             await ctx.send(
                 f"✅ 상태: 정상 운영중\n"
                 f"💬 버퍼: {buf}개 채팅 대기\n"
-                f"🎤 {busy}"
+                f"🎤 {busy}\n"
+                f"📄 발표: {presenting}"
             )
 
         @self.bot.command(name="clear")
@@ -118,6 +108,50 @@ class VTuberController:
                 return
             reader.topic = args
             await ctx.send(f"✅ 주제 변경: {reader.topic}")
+
+        @self.bot.command(name="present")
+        async def present(ctx, *, path=None):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not path:
+                await ctx.send("사용법: /present [PDF경로]")
+                return
+            if not os.path.exists(path):
+                await ctx.send(f"❌ 파일 없음: `{path}`")
+                return
+
+            from brain.presenter import PDFPresenter
+            self.presenter = PDFPresenter(reader=reader, main_loop=self.main_loop)
+            count = self.presenter.load(path)
+            await ctx.send(f"📄 발표 시작! 총 {count}장")
+
+            asyncio.run_coroutine_threadsafe(
+                self.presenter.present(callback=reader.callback),
+                self.main_loop
+            )
+
+        @self.bot.command(name="qa")
+        async def qa(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not self.presenter or not self.presenter.running:
+                await ctx.send("진행 중인 발표가 없어!")
+                return
+            paused = self.presenter.toggle_pause()
+            if paused:
+                await ctx.send("⏸ 질문타임! 채팅으로 질문해줘")
+            else:
+                await ctx.send("▶ 발표 재개!")
+
+        @self.bot.command(name="stop_present")
+        async def stop_present(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not self.presenter:
+                await ctx.send("진행 중인 발표가 없어!")
+                return
+            self.presenter.stop()
+            await ctx.send("⏹ 발표 종료!")
 
         @self.bot.command(name="stop")
         async def stop(ctx):
@@ -141,6 +175,10 @@ class VTuberController:
                 "/clear - 채팅 버퍼 비우기\n"
                 "/topic [주제] - 방송 주제 변경\n"
                 "/stop - 방송 종료\n\n"
+                "📄 발표\n"
+                "/present [PDF경로] - 발표 시작\n"
+                "/qa - 질문타임 토글 (일시정지/재개)\n"
+                "/stop_present - 발표 종료\n\n"
                 "/help - 도움말"
             )
 
