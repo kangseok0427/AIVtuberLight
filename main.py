@@ -1,11 +1,11 @@
 # main.py
 import asyncio
 import os
+import random
 import threading
 import signal
 from dotenv import load_dotenv
 from brain.agent import agent, NAME, detect_emotion, update_obs
-import random
 
 load_dotenv()
 
@@ -43,13 +43,14 @@ async def main():
                 f"{nickname} 왜 그래.. 나 지금 열심히 하고 있었는데 😔",
             ]
             msg = random.choice(reactions)
+            await bridge.trigger_and_reset("Exp5 FaceShadow", duration=0.5)
             await asyncio.gather(
                 bridge.shake(duration=2.0),
-                text_to_speech(msg),
-                bridge.trigger_and_reset("Exp5 FaceShadow", duration=2.0)
+                text_to_speech(msg)
             )
             return
         # ───────────────────────────────────────────────
+
         if content.startswith("[도네"):
             user_input = f"{nickname}님이 {content} 후원해주셨어요!"
         elif content == "[구독]":
@@ -69,7 +70,7 @@ async def main():
                     "vtube_expression": None,
                     "answer":           ""
                 })),
-                timeout=60.0  # 60초 안에 응답 없으면 포기
+                timeout=60.0
             )
         except asyncio.TimeoutError:
             print(f"[⚠️] 응답 타임아웃: {nickname}: {content}")
@@ -96,8 +97,8 @@ async def main():
     )
 
     controller = VTuberController(reader=reader, main_loop=main_loop)
-    reader.controller = controller  # 필터 알람용 역참조
     controller.bridge = bridge
+    reader.controller = controller
 
     bot_thread = threading.Thread(target=controller.run, daemon=True)
     bot_thread.start()

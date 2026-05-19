@@ -14,7 +14,7 @@ PLUGIN_DEV   = "Gaon"
 class VTubeBridge:
     def __init__(self):
         self.ws         = None
-        self.auth_token = os.getenv("VTUBE_TOKEN")  # ✅ env에서 불러오기
+        self.auth_token = os.getenv("VTUBE_TOKEN")
 
     async def connect(self):
         self.ws = await websockets.connect(VTUBE_WS_URL, ping_interval=None)
@@ -27,7 +27,6 @@ class VTubeBridge:
         return json.loads(resp)
 
     async def _authenticate(self):
-        # 토큰 없으면 새로 발급 후 출력
         if not self.auth_token:
             print("[VTube] 토큰 없음, 새로 발급 중... VTube Studio 팝업 허용해주세요!")
             resp = await self._send({
@@ -45,7 +44,6 @@ class VTubeBridge:
             print(f"\n✅ 토큰 발급 완료! .env에 아래 줄 추가하세요:")
             print(f"VTUBE_TOKEN={self.auth_token}\n")
 
-        # 토큰으로 인증
         resp2 = await self._send({
             "apiName": "VTubeStudioPublicAPI",
             "apiVersion": "1.0",
@@ -64,8 +62,6 @@ class VTubeBridge:
         if not authenticated:
             print("[VTube] 토큰 만료! .env에서 VTUBE_TOKEN 삭제 후 재실행하세요.")
             raise Exception("VTube Studio 인증 실패")
-        
-        # avatar/vtube_bridge.py - 파일 맨 아래에 추가 (class 안에 들여쓰기 맞춰서)
 
     async def get_expressions(self) -> list:
         resp = await self._send({
@@ -77,11 +73,8 @@ class VTubeBridge:
         })
         return resp["data"]["expressions"]
 
-# avatar/vtube_bridge.py - set_expression, reset_expression 교체
-
     async def set_expression(self, expression_name: str) -> None:
         print(f"[VTube] 표정 시도: {expression_name}.exp3.json")
-        # recv() 없이 send만 (VTube Studio 응답 안기다림)
         await self.ws.send(json.dumps({
             "apiName": "VTubeStudioPublicAPI",
             "apiVersion": "1.0",
@@ -92,7 +85,6 @@ class VTubeBridge:
                 "active": True
             }
         }))
-        # 응답 버리기
         await self.ws.recv()
 
     async def reset_expression(self, expression_name: str) -> None:
@@ -121,8 +113,8 @@ class VTubeBridge:
             await self.set_expression(expression_name)
             await asyncio.sleep(duration)
             await self.reset_expression(expression_name)
-            
-    async def shake(self, duration: float = 3.0, intensity: float = 1.0):
+
+    async def shake(self, duration: float = 2.0, intensity: float = 1.0):
         print(f"[VTube] 흔들기 시작! {duration}초")
         end_time = asyncio.get_event_loop().time() + duration
         toggle = 1
