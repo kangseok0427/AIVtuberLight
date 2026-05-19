@@ -7,10 +7,11 @@ import os
 import re
 import time
 import random
+from datetime import datetime
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
-from control.discord_bot import check_chat
+from control.filter import check_chat
 
 load_dotenv()
 
@@ -25,12 +26,11 @@ GAME_BASE = "https://comm-api.game.naver.com/nng_main"
 WS_URL    = "wss://kr-ss1.chat.naver.com/chat"
 
 def _is_emoji_only(text: str) -> bool:
-    # 치지직 이모티콘 {:xxx:} 제거
     cleaned = re.sub(r'\{:[^}]+:\}', '', text).strip()
     if not cleaned:
         return True
-    # 한글 초성/중성/종성 전체 범위 + 영문 + 숫자 포함
     return not bool(re.search(r'[ㄱ-ㅎㅏ-ㅣ가-힣a-zA-Z0-9]', cleaned))
+
 
 class ChzzkReader:
     def __init__(self, on_chat_callback, on_subscription_callback=None, topic: str = ""):
@@ -41,6 +41,10 @@ class ChzzkReader:
         self.is_busy               = False
         self.topic                 = topic
         self.controller            = None
+        self.news_enabled          = False
+        self.shake_enabled = False
+        self.news_topic            = "IT 기술"
+        self.last_news_hour        = -1
         self.llm                   = ChatGroq(
             model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY"),
@@ -90,7 +94,6 @@ class ChzzkReader:
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(WS_URL) as ws:
                 print("[치지직] WebSocket 연결됨!")
-
                 connect_msg = {
                     "ver": "2",
                     "cmd": 100,
@@ -108,10 +111,11 @@ class ChzzkReader:
 
                 async def ping_loop():
                     while True:
-                        await asyncio.sleep(30)
+                        await asyncio.sleep(20)  # 30 → 20으로 줄임
                         try:
                             await ws.send_str(json.dumps({"ver": "2", "cmd": 0}))
-                        except:
+                        except Exception as e:
+                            print(f"[치지직] 핑 실패: {e}")
                             break
 
                 asyncio.create_task(ping_loop())
@@ -120,7 +124,7 @@ class ChzzkReader:
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         await self._handle_message(json.loads(msg.data))
                     elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        print("[치지직] WebSocket 닫힘")
+                        print(f"[치지직] WebSocket 닫힘: {msg.type}")
                         break
 
     async def _handle_message(self, data: dict):
@@ -135,12 +139,10 @@ class ChzzkReader:
                     if not content:
                         return
 
-                    # 이모티콘만 있는 채팅 필터
                     if _is_emoji_only(content):
                         print(f"[필터] 이모티콘: {nickname}: {content}")
                         return
 
-                    # 욕설/스팸 필터
                     reason = check_chat(nickname, content)
                     if reason:
                         print(f"[필터] {nickname}: {content} ({reason})")
@@ -173,6 +175,20 @@ class ChzzkReader:
                 except Exception as e:
                     print(f"[도네 파싱 오류] {e}")
 
+    async def _run_news_briefing(self):
+        print(f"[뉴스] 브리핑 시작: {self.news_topic}")
+        prompt = (
+            f"[뉴스 브리핑 시간]\n"
+            f"지금 {self.news_topic} 관련 최신 뉴스 3~5개 검색해서 "
+            f"아나운서처럼 핵심만 브리핑해줘. "
+            f"각 뉴스마다 짧게 한마디 코멘트도 추가해줘."
+        )
+        self.is_busy = True
+        try:
+            await self.callback("뉴스", prompt)
+        finally:
+            self.is_busy = False
+
     def _pick_by_topic_sync(self) -> tuple:
         candidates = self.buffer[-5:]
         chat_list = "\n".join(
@@ -200,6 +216,15 @@ Which message number is most relevant to the topic? Reply with just the number."
         while True:
             await asyncio.sleep(0.5)
 
+            # ── 정시 뉴스 브리핑 체크 ─────────────────────
+            if self.news_enabled and not self.is_busy:
+                now_dt = datetime.now()
+                if now_dt.minute == 0 and now_dt.hour != self.last_news_hour:
+                    self.last_news_hour = now_dt.hour
+                    asyncio.create_task(self._run_news_briefing())
+                    continue
+            # ───────────────────────────────────────────────
+
             if self.is_busy:
                 continue
 
@@ -213,10 +238,10 @@ Which message number is most relevant to the topic? Reply with just the number."
             if not self.buffer:
                 continue
 
-            now = time.time()
+            now_ts = time.time()
             self.buffer = [
                 item for item in self.buffer
-                if now - item[2] <= EXPIRE_SEC
+                if now_ts - item[2] <= EXPIRE_SEC
             ]
 
             if not self.buffer:
@@ -250,7 +275,8 @@ Which message number is most relevant to the topic? Reply with just the number."
                 self.access_token    = await self._get_access_token()
                 await self._connect_websocket()
             except Exception as e:
+                print(f"[치지직] 재연결 오류: {type(e).__name__}: {e}")
                 if first:
                     first = False
-                print("[치지직] 재연결 중...")
+                print("[치지직] 10초 후 재연결...")
                 await asyncio.sleep(10)

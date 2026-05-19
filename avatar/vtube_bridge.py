@@ -121,6 +121,45 @@ class VTubeBridge:
             await self.set_expression(expression_name)
             await asyncio.sleep(duration)
             await self.reset_expression(expression_name)
+            
+    async def shake(self, duration: float = 3.0, intensity: float = 1.0):
+        print(f"[VTube] 흔들기 시작! {duration}초")
+        end_time = asyncio.get_event_loop().time() + duration
+        toggle = 1
+
+        while asyncio.get_event_loop().time() < end_time:
+            await self.ws.send(json.dumps({
+                "apiName": "VTubeStudioPublicAPI",
+                "apiVersion": "1.0",
+                "requestID": "shake",
+                "messageType": "InjectParameterDataRequest",
+                "data": {
+                    "faceFound": False,
+                    "mode": "set",
+                    "parameterValues": [
+                        {"id": "FaceAngleX", "value": intensity * 30 * toggle}
+                    ]
+                }
+            }))
+            await self.ws.recv()
+            toggle *= -1
+            await asyncio.sleep(0.08)
+
+        await self.ws.send(json.dumps({
+            "apiName": "VTubeStudioPublicAPI",
+            "apiVersion": "1.0",
+            "requestID": "shake_reset",
+            "messageType": "InjectParameterDataRequest",
+            "data": {
+                "faceFound": False,
+                "mode": "set",
+                "parameterValues": [
+                    {"id": "FaceAngleX", "value": 0}
+                ]
+            }
+        }))
+        await self.ws.recv()
+        print("[VTube] 흔들기 종료")
 
     async def disconnect(self) -> None:
         if self.ws:

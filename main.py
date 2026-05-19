@@ -5,6 +5,7 @@ import threading
 import signal
 from dotenv import load_dotenv
 from brain.agent import agent, NAME, detect_emotion, update_obs
+import random
 
 load_dotenv()
 
@@ -29,6 +30,26 @@ async def main():
     main_loop = asyncio.get_event_loop()
 
     async def handle_chat(nickname: str, content: str):
+        # ── shake 키워드 감지 ──────────────────────────
+        if reader.shake_enabled and content.strip().lower() == "shake":
+            print(f"[흔들기] {nickname} shake!")
+            reactions = [
+                f"{nickname} 왜 이러는 거야.. 나 지금 방송 중이잖아 😔",
+                f"어지러워.. {nickname} 좀 그만해줄래 💜",
+                f"하.. {nickname} 나 지금 힘든데 😞",
+                f"{nickname} 나 괜찮긴 한데.. 좀 살살 해줘 💜",
+                f"흔들리니까 이상해.. {nickname} 😢",
+                f"나 어지러워 {nickname}.. 조금만 쉬자 💜",
+                f"{nickname} 왜 그래.. 나 지금 열심히 하고 있었는데 😔",
+            ]
+            msg = random.choice(reactions)
+            await asyncio.gather(
+                bridge.shake(duration=2.0),
+                text_to_speech(msg),
+                bridge.trigger_and_reset("Exp5 FaceShadow", duration=2.0)
+            )
+            return
+        # ───────────────────────────────────────────────
         if content.startswith("[도네"):
             user_input = f"{nickname}님이 {content} 후원해주셨어요!"
         elif content == "[구독]":
@@ -39,13 +60,20 @@ async def main():
             user_input = f"{nickname}: {content}"
 
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, lambda: agent.invoke({
-            "user_input":       user_input,
-            "messages":         [],
-            "emotion":          "",
-            "vtube_expression": None,
-            "answer":           ""
-        }))
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: agent.invoke({
+                    "user_input":       user_input,
+                    "messages":         [],
+                    "emotion":          "",
+                    "vtube_expression": None,
+                    "answer":           ""
+                })),
+                timeout=60.0  # 60초 안에 응답 없으면 포기
+            )
+        except asyncio.TimeoutError:
+            print(f"[⚠️] 응답 타임아웃: {nickname}: {content}")
+            return
 
         print(f"😊 감정: {result['emotion']} → {result['vtube_expression']}")
         print(f"🎤 {NAME}: {result['answer']}\n")
@@ -69,6 +97,7 @@ async def main():
 
     controller = VTuberController(reader=reader, main_loop=main_loop)
     reader.controller = controller  # 필터 알람용 역참조
+    controller.bridge = bridge
 
     bot_thread = threading.Thread(target=controller.run, daemon=True)
     bot_thread.start()

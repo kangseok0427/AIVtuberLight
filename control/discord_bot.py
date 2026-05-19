@@ -1,279 +1,226 @@
-# chat/reader.py
-import asyncio
-import aiohttp
-import httpx
-import json
+# control/discord_bot.py
 import os
-import re
-import time
-import random
-from datetime import datetime
+import asyncio
+import discord
+from discord.ext import commands
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage
-from control.discord_bot import check_chat
 
 load_dotenv()
 
-CHANNEL_ID = os.getenv("CHZZK_CHANNEL_ID")
-NID_AUT    = os.getenv("CHZZK_NID_AUT")
-NID_SES    = os.getenv("CHZZK_NID_SES")
-EXPIRE_SEC = 30
-BUFFER_MAX = 20
-
-API_BASE  = "https://api.chzzk.naver.com"
-GAME_BASE = "https://comm-api.game.naver.com/nng_main"
-WS_URL    = "wss://kr-ss1.chat.naver.com/chat"
-
-def _is_emoji_only(text: str) -> bool:
-    cleaned = re.sub(r'\{:[^}]+:\}', '', text).strip()
-    if not cleaned:
-        return True
-    return not bool(re.search(r'[ㄱ-ㅎㅏ-ㅣ가-힣a-zA-Z0-9]', cleaned))
+DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
+DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
 
 
-class ChzzkReader:
-    def __init__(self, on_chat_callback, on_subscription_callback=None, topic: str = ""):
-        self.callback              = on_chat_callback
-        self.subscription_callback = on_subscription_callback
-        self.buffer                = []
-        self.priority_buffer       = []
-        self.is_busy               = False
-        self.topic                 = topic
-        self.controller            = None
-        self.news_enabled          = False
-        self.news_topic            = "IT 기술"
-        self.last_news_hour        = -1
-        self.llm                   = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=os.getenv("GROQ_API_KEY"),
-            temperature=0.1,
-            max_tokens=10,
+class VTuberController:
+    def __init__(self, reader, main_loop: asyncio.AbstractEventLoop):
+        self.reader     = reader
+        self.main_loop  = main_loop
+        self.channel    = None
+        self.presenter  = None
+        self.bridge = None
+
+        intents = discord.Intents.default()
+        intents.message_content = True
+        self.bot = commands.Bot(command_prefix="/", intents=intents, help_command=None)
+        self._setup()
+
+    async def send_filter_alert(self, username: str, text: str, reason: str):
+        if not self.channel:
+            return
+        embed = discord.Embed(
+            title="🚨 채팅 필터 감지",
+            color=discord.Color.red()
         )
-        self.cookies = {
-            "NID_AUT": NID_AUT,
-            "NID_SES": NID_SES,
-        }
-        self.chat_channel_id = None
-        self.access_token    = None
-
-    async def _get_chat_channel_id(self) -> str:
-        url = f"{API_BASE}/service/v2/channels/{CHANNEL_ID}/live-detail"
-        print(f"[치지직] 채널 정보 요청 중...")
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://chzzk.naver.com",
-        }
-        async with httpx.AsyncClient(
-            cookies=self.cookies,
-            headers=headers,
-            timeout=15,
-            follow_redirects=True
-        ) as client:
-            resp = await client.get(url)
-            print(f"[치지직] 응답 코드: {resp.status_code}")
-            data = resp.json()
-            channel_id = data["content"]["chatChannelId"]
-            print(f"[치지직] 채팅 채널 ID: {channel_id}")
-            return channel_id
-
-    async def _get_access_token(self) -> str:
-        url = f"{GAME_BASE}/v1/chats/access-token?channelId={self.chat_channel_id}&chatType=STREAMING"
-        async with httpx.AsyncClient(
-            cookies=self.cookies,
-            timeout=15,
-            follow_redirects=True
-        ) as client:
-            resp = await client.get(url)
-            data = resp.json()
-            token = data["content"]["accessToken"]
-            return token
-
-    async def _connect_websocket(self) -> None:
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(WS_URL) as ws:
-                print("[치지직] WebSocket 연결됨!")
-                connect_msg = {
-                    "ver": "2",
-                    "cmd": 100,
-                    "svcid": "game",
-                    "cid": self.chat_channel_id,
-                    "bdy": {
-                        "uid": None,
-                        "devType": 2001,
-                        "accTkn": self.access_token,
-                        "auth": "READ"
-                    },
-                    "tid": 1
-                }
-                await ws.send_str(json.dumps(connect_msg))
-
-                async def ping_loop():
-                    while True:
-                        await asyncio.sleep(30)
-                        try:
-                            await ws.send_str(json.dumps({"ver": "2", "cmd": 0}))
-                        except:
-                            break
-
-                asyncio.create_task(ping_loop())
-
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_message(json.loads(msg.data))
-                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        print("[치지직] WebSocket 닫힘")
-                        break
-
-    async def _handle_message(self, data: dict):
-        cmd = data.get("cmd")
-
-        if cmd == 93101:
-            for chat in data.get("bdy", []):
-                try:
-                    profile  = json.loads(chat.get("profile", "{}"))
-                    nickname = profile.get("nickname", "익명")
-                    content  = chat.get("msg", "")
-                    if not content:
-                        return
-
-                    if _is_emoji_only(content):
-                        print(f"[필터] 이모티콘: {nickname}: {content}")
-                        return
-
-                    reason = check_chat(nickname, content)
-                    if reason:
-                        print(f"[필터] {nickname}: {content} ({reason})")
-                        if self.controller:
-                            asyncio.create_task(
-                                self.controller.send_filter_alert(nickname, content, reason)
-                            )
-                        return
-
-                    print(f"[채팅] {nickname}: {content}")
-                    if len(self.buffer) >= BUFFER_MAX:
-                        self.buffer.pop(0)
-                    self.buffer.append((nickname, content, time.time()))
-                except Exception as e:
-                    print(f"[채팅 파싱 오류] {e}")
-
-        elif cmd == 93102:
-            for donation in data.get("bdy", []):
-                try:
-                    profile  = json.loads(donation.get("profile", "{}"))
-                    nickname = profile.get("nickname", "익명")
-                    amount   = donation.get("extras", {}).get("payAmount", 0)
-                    content  = donation.get("msg", "")
-                    print(f"[도네] {nickname}: {amount}원 {content}")
-                    self.buffer.insert(0, (
-                        nickname,
-                        f"[도네 {amount}원] {content}" if content else f"[도네 {amount}원]",
-                        time.time()
-                    ))
-                except Exception as e:
-                    print(f"[도네 파싱 오류] {e}")
-
-    async def _run_news_briefing(self):
-        print(f"[뉴스] 브리핑 시작: {self.news_topic}")
-        prompt = (
-            f"[뉴스 브리핑 시간]\n"
-            f"지금 {self.news_topic} 관련 최신 뉴스 3~5개 검색해서 "
-            f"아나운서처럼 핵심만 브리핑해줘. "
-            f"각 뉴스마다 짧게 한마디 코멘트도 추가해줘."
+        embed.add_field(name="유저", value=username, inline=True)
+        embed.add_field(name="사유", value=reason, inline=True)
+        embed.add_field(name="내용", value=f"||{text}||", inline=False)
+        asyncio.run_coroutine_threadsafe(
+            self.channel.send(embed=embed),
+            self.bot.loop
         )
-        self.is_busy = True
-        try:
-            await self.callback("뉴스", prompt)
-        finally:
-            self.is_busy = False
 
-    def _pick_by_topic_sync(self) -> tuple:
-        candidates = self.buffer[-5:]
-        chat_list = "\n".join(
-            f"{i+1}. {nick}: {content}"
-            for i, (nick, content, _) in enumerate(candidates)
-        )
-        system = SystemMessage(content="""You are a chat selector for a VTuber stream.
-Given a list of chat messages and a topic, select the most relevant message number.
-Respond with ONLY a single number. Nothing else.""")
-        human = HumanMessage(content=f"""Topic: {self.topic}
+    def _setup(self):
+        reader = self.reader
 
-Chat messages:
-{chat_list}
+        @self.bot.event
+        async def on_ready():
+            print(f"[디스코드] 봇 연결됨: {self.bot.user}")
+            self.channel = self.bot.get_channel(DISCORD_CHANNEL_ID)
+            if self.channel:
+                await self.channel.send("✅ 가온 봇 온라인!")
 
-Which message number is most relevant to the topic? Reply with just the number.""")
-        try:
-            response = self.llm.invoke([system, human])
-            idx = int(response.content.strip()) - 1
-            idx = max(0, min(idx, len(candidates) - 1))
-            return candidates[idx]
-        except:
-            return random.choice(candidates)
+        @self.bot.command(name="say")
+        async def say(ctx, *, text=None):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not text:
+                await ctx.send("사용법: /say [내용]")
+                return
+            import time
+            reader.priority_buffer.append(("디스코드", text, time.time()))
+            await ctx.send(f"📢 우선 전달: `{text}`")
 
-    async def pick_and_respond(self):
-        while True:
-            await asyncio.sleep(0.5)
+        @self.bot.command(name="status")
+        async def status(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            buf  = len(reader.buffer)
+            busy = "응답 중" if reader.is_busy else "대기 중"
+            news = f"ON ({reader.news_topic})" if reader.news_enabled else "OFF"
+            presenting = f"발표 중 ({self.presenter.current}/{len(self.presenter.slides)}장)" if self.presenter and self.presenter.running else "없음"
+            await ctx.send(
+                f"✅ 상태: 정상 운영중\n"
+                f"💬 버퍼: {buf}개 채팅 대기\n"
+                f"🎤 {busy}\n"
+                f"📰 뉴스 브리핑: {news}\n"
+                f"📄 발표: {presenting}"
+            )
 
-            # ── 정시 뉴스 브리핑 체크 ─────────────────────
-            if self.news_enabled and not self.is_busy:
-                now = datetime.now()
-                if now.minute == 0 and now.hour != self.last_news_hour:
-                    self.last_news_hour = now.hour
-                    asyncio.create_task(self._run_news_briefing())
-                    continue
-            # ───────────────────────────────────────────────
+        @self.bot.command(name="clear")
+        async def clear(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            reader.buffer.clear()
+            await ctx.send("🗑️ 버퍼 비웠어!")
 
-            if self.is_busy:
-                continue
+        @self.bot.command(name="topic")
+        async def topic(ctx, *, args=None):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not args:
+                await ctx.send(f"현재 주제: {reader.topic or '자유 주제'}")
+                return
+            reader.topic = args
+            await ctx.send(f"✅ 주제 변경: {reader.topic}")
 
-            if self.priority_buffer:
-                nickname, content, _ = self.priority_buffer.pop(0)
-                print(f"[우선처리] {nickname}: {content}")
-                self.is_busy = True
-                asyncio.create_task(self._run_callback(nickname, content))
-                continue
+        # ── 뉴스 브리핑 ────────────────────────────────
+        @self.bot.command(name="news_on")
+        async def news_on(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            reader.news_enabled = True
+            await ctx.send(f"📰 뉴스 브리핑 ON! 주제: {reader.news_topic}")
 
-            if not self.buffer:
-                continue
+        @self.bot.command(name="news_off")
+        async def news_off(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            reader.news_enabled = False
+            await ctx.send("📰 뉴스 브리핑 OFF!")
 
-            now_ts = time.time()
-            self.buffer = [
-                item for item in self.buffer
-                if now_ts - item[2] <= EXPIRE_SEC
-            ]
+        @self.bot.command(name="news_topic")
+        async def news_topic(ctx, *, keyword=None):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not keyword:
+                await ctx.send(f"현재 뉴스 주제: {reader.news_topic}\n사용법: /news_topic [키워드]")
+                return
+            reader.news_topic = keyword
+            await ctx.send(f"📰 뉴스 주제 변경: {keyword}")
+        # ───────────────────────────────────────────────
+                # ── 흔들기 ─────────────────────────────────────────────
+        @self.bot.command(name="shake_on")
+        async def shake_on(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            reader.shake_enabled = True
+            await ctx.send("💜 흔들기 ON! 채팅에 shake 치면 흔들려!")
 
-            if not self.buffer:
-                continue
+        @self.bot.command(name="shake_off")
+        async def shake_off(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            reader.shake_enabled = False
+            await ctx.send("✅ 흔들기 OFF!")
+        # ───────────────────────────────────────────────────────
 
-            if self.topic and len(self.buffer) > 1:
-                loop = asyncio.get_event_loop()
-                picked = await loop.run_in_executor(None, self._pick_by_topic_sync)
-            else:
-                picked = random.choice(self.buffer)
+        # ── 발표 ────────────────────────────────────────
+        @self.bot.command(name="present")
+        async def present(ctx, *, path=None):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not path:
+                await ctx.send("사용법: /present [PDF경로]")
+                return
+            if not os.path.exists(path):
+                await ctx.send(f"❌ 파일 없음: `{path}`")
+                return
+            from brain.presenter import PDFPresenter
+            self.presenter = PDFPresenter(reader=reader, main_loop=self.main_loop)
+            count = self.presenter.load(path)
+            await ctx.send(f"📄 발표 시작! 총 {count}장")
+            asyncio.run_coroutine_threadsafe(
+                self.presenter.present(callback=reader.callback),
+                self.main_loop
+            )
 
-            self.buffer.clear()
-            nickname, content, _ = picked
-            print(f"[응답 중] {nickname}: {content}")
+        @self.bot.command(name="qa_on")
+        async def qa_on(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not self.presenter or not self.presenter.running:
+                await ctx.send("진행 중인 발표가 없어!")
+                return
+            self.presenter.paused = True
+            await ctx.send("⏸ 질문타임 시작! 채팅으로 질문해줘")
 
-            self.is_busy = True
-            asyncio.create_task(self._run_callback(nickname, content))
+        @self.bot.command(name="qa_off")
+        async def qa_off(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not self.presenter or not self.presenter.running:
+                await ctx.send("진행 중인 발표가 없어!")
+                return
+            self.presenter.paused = False
+            await ctx.send("▶ 발표 재개!")
 
-    async def _run_callback(self, nickname: str, content: str):
-        try:
-            await self.callback(nickname, content)
-        finally:
-            self.is_busy = False
+        @self.bot.command(name="stop_present")
+        async def stop_present(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if not self.presenter:
+                await ctx.send("진행 중인 발표가 없어!")
+                return
+            self.presenter.stop()
+            await ctx.send("⏹ 발표 종료!")
+        # ───────────────────────────────────────────────
 
-    async def start(self):
-        asyncio.create_task(self.pick_and_respond())
-        first = True
-        while True:
-            try:
-                self.chat_channel_id = await self._get_chat_channel_id()
-                self.access_token    = await self._get_access_token()
-                await self._connect_websocket()
-            except Exception as e:
-                if first:
-                    first = False
-                print("[치지직] 재연결 중...")
-                await asyncio.sleep(10)
+        @self.bot.command(name="stop")
+        async def stop(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            await ctx.send("⏹ 방송 종료됨!")
+            from brain.agent import update_obs
+            update_obs("😴 가온이 자는 중...")
+            await asyncio.sleep(1)
+            os._exit(0)
+
+        @self.bot.command(name="help")
+        async def help_cmd(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            await ctx.send(
+                "📋 명령어 목록\n\n"
+                "🔧 기본\n"
+                "/say [내용] - 가온이에게 직접 전달 (최우선)\n"
+                "/status - 현재 상태 확인\n"
+                "/clear - 채팅 버퍼 비우기\n"
+                "/topic [주제] - 방송 주제 변경\n"
+                "/stop - 방송 종료\n\n"
+                "📰 뉴스 브리핑\n"
+                "/news_on - 정시 브리핑 시작\n"
+                "/news_off - 정시 브리핑 중지\n"
+                "/news_topic [키워드] - 뉴스 주제 변경\n\n"
+                "📄 발표\n"
+                "/present [PDF경로] - 발표 시작\n"
+                "/qa_on - 질문타임 시작 (발표 일시정지)\n"
+                "/qa_off - 질문타임 종료 (발표 재개)\n"
+                "/stop_present - 발표 종료\n\n"
+                "/help - 도움말"
+                "💜 벌칙\n"
+                "/shake_on - 채팅 shake 감지 ON\n"
+                "/shake_off - 채팅 shake 감지 OFF\n\n"
+            )
+
+    def run(self):
+        self.bot.run(DISCORD_TOKEN)
