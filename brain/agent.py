@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 from brain.llm_config import get_think_llm, get_answer_llm, get_think_llm_with_tools
 
-from brain.tools import SearchTool, MemoryTool, build_code_reader
+from brain.tools import SearchTool, MemoryTool, build_code_reader, build_eternal_return_tool
 from tts.tts import text_to_speech
 
 load_dotenv()
@@ -23,11 +23,12 @@ T_THINK  = float(os.getenv("VTUBER_THINK_TEMP"))
 T_ANSWER = float(os.getenv("VTUBER_ANSWER_TEMP"))
 
 # 툴 인스턴스
-search_tool   = SearchTool().build()
-memory_tool   = MemoryTool()
-memory_search = memory_tool.build()
-code_reader   = build_code_reader()
-tools         = [search_tool, memory_search, code_reader]
+search_tool    = SearchTool().build()
+memory_tool    = MemoryTool()
+memory_search  = memory_tool.build()
+code_reader    = build_code_reader()
+er_tool        = build_eternal_return_tool()
+tools          = [search_tool, memory_search, code_reader, er_tool]
 
 # LLM
 llm_think = get_think_llm()
