@@ -63,9 +63,9 @@ EMOTION_MAP = {
 }
 
 def detect_emotion(answer: str) -> tuple[str, str]:
-    match = re.search(r'\[EMOTION:(\w+)\]', answer)
+    match = re.search(r'\[EMOTION:\s*(\w+)\s*\]', answer)
     emotion = match.group(1) if match else "neutral"
-    clean_answer = re.sub(r'\[EMOTION:\w+\]', '', answer).strip()
+    clean_answer = re.sub(r'\[EMOTION:\s*\w+\s*\]', '', answer).strip()
     return emotion, clean_answer
 
 def update_obs(text: str):
@@ -144,6 +144,19 @@ def answer_node(state: VTuberState) -> VTuberState:
 
         if tool_results:
             user_content += f"\n\n[검색 결과]{tool_results}"
+
+        # ── 최근 대화 맥락 추가 ────────────────────────
+        all_results = memory_tool.db.get()
+        if all_results and all_results['documents']:
+            paired = list(zip(all_results['documents'], all_results['metadatas']))
+            paired.sort(key=lambda x: x[1].get('timestamp', ''), reverse=True)
+            recent = paired[:5]  # 3 → 5개
+            recent.reverse()
+            memory_context = "\n\n[최근 대화 기록]\n" + "\n".join(
+                f"- {doc}" for doc, _ in recent
+            )
+            user_content += memory_context
+        # ───────────────────────────────────────────────
 
         human = HumanMessage(content=user_content)
         response = llm_answer.invoke([system, human])

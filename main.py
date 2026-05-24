@@ -22,7 +22,10 @@ async def main():
     print(f"[✅] VTube Studio 연결 완료")
 
     topic = input("\n오늘 방송 주제 (없으면 엔터): ").strip()
+    mode  = input("모드 선택 (1: 음성, 2: 채팅): ").strip()
+
     print(f"[주제] {topic if topic else '자유 주제'}")
+    print(f"[모드] {'음성 입력' if mode == '1' else '채팅 입력'}")
     print(f"\n{'='*40}")
     print(f"  {NAME} 방송 시작!")
     print(f"{'='*40}\n")
@@ -70,7 +73,7 @@ async def main():
                     "vtube_expression": None,
                     "answer":           ""
                 })),
-                timeout=60.0
+                timeout=90.0
             )
         except asyncio.TimeoutError:
             print(f"[⚠️] 응답 타임아웃: {nickname}: {content}")
@@ -111,7 +114,15 @@ async def main():
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
 
-    await reader.start()
+    # ── 모드 분기 ──────────────────────────────────────
+    if mode == "1":
+        from voice.listener import voice_loop
+        asyncio.create_task(voice_loop(handle_chat, name="개발자"))
+        print("[✅] 음성 모드 시작!")
+        await asyncio.Event().wait()
+    else:
+        await reader.start()
+    # ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
     asyncio.run(main())

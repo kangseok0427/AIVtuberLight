@@ -1,96 +1,86 @@
 # brain/tools/eternal_return.py
 import os
+import re
+import time
 import httpx
 from langchain.tools import tool
 from dotenv import load_dotenv
 
 load_dotenv()
 
-ER_API_KEY  = os.getenv("ER_API_KEY")
-ER_BASE_URL = "https://open-api.eternalreturn.io/open-api"
-HEADERS     = {"x-api-key": ER_API_KEY}
+ER_API_KEY     = os.getenv("ER_API_KEY")
+ER_BASE_URL    = "https://open-api.bser.io/v1"
+HEADERS        = {"x-api-key": ER_API_KEY}
+CURRENT_SEASON = 9  # 공개 시즌 번호 (API ID = 17)
 
-async def _get(endpoint: str) -> dict:
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"{ER_BASE_URL}{endpoint}", headers=HEADERS)
-        return resp.json()
+def _to_api_id(season: int) -> int:
+    return season * 2 - 1
 
-def _get_sync(endpoint: str) -> dict:
+def _get(endpoint: str) -> dict:
+    time.sleep(1.1)
     with httpx.Client(timeout=10) as client:
-        resp = client.get(f"{ER_BASE_URL}{endpoint}", headers=HEADERS)
-        return resp.json()
+        return client.get(f"{ER_BASE_URL}{endpoint}", headers=HEADERS).json()
+
+def _get_user_id(nickname: str) -> str | None:
+    data = _get(f"/user/nickname?query={nickname}")
+    return data["user"]["userId"] if data.get("code") == 200 else None
+
+def _parse_season(query: str) -> int:
+    m = re.search(r'(\d+)\s*시즌', query)
+    return int(m.group(1)) if m else CURRENT_SEASON
+
+def _parse_nickname(query: str) -> str:
+    m = re.search(r'["\'](.+?)["\']', query)
+    return m.group(1) if m else query.split()[0]
 
 def build_eternal_return_tool():
 
     @tool
     def eternal_return_search(query: str) -> str:
         """
-        이터널리턴 관련 정보를 조회할 때 사용.
-        시청자가 캐릭터 정보, 아이템, 매치 결과, 랭킹 등을 물어볼 때 호출.
-        query 예시: '매그너스 정보', '내 최근 매치', '현재 랭킹'
+        이터널리턴 관련 정보 조회. 유저 랭크, 탑 랭커 조회 시 사용.
+        query 예시:
+        - '니키의땀찬스패츠 랭크'
+        - '니키의땀찬스패츠 3시즌 랭크'
+        - '솔로 탑랭커'
+        - '9시즌 듀오 탑랭커'
         """
         try:
-            q = query.lower()
+            q        = query.lower()
+            season   = _parse_season(query)
+            api_id   = _to_api_id(season)
+            mode     = 2 if "듀오" in q else (3 if "스쿼드" in q else 1)
+            mode_str = {1: "솔로", 2: "듀오", 3: "스쿼드"}[mode]
 
-            # 유저 닉네임으로 매치 조회
-            if "매치" in q or "전적" in q or "결과" in q:
-                # 쿼리에서 닉네임 추출 (예: "가온0033 전적")
-                words = query.split()
-                nickname = words[0] if len(words) > 1 else ""
-                if not nickname:
-                    return "닉네임을 함께 알려줘! 예: '가온0033 전적'"
-
-                # 유저 번호 조회
-                user_data = _get_sync(f"/v1/user/nickname?nickname={nickname}")
-                if user_data.get("code") != 200:
-                    return f"유저 {nickname}를 찾을 수 없어요."
-                user_num = user_data["user"]["userNum"]
-
-                # 최근 매치 조회
-                match_data = _get_sync(f"/v1/user/games/{user_num}")
-                if match_data.get("code") != 200:
-                    return "매치 데이터를 가져올 수 없어요."
-
-                games = match_data.get("userGames", [])[:3]
-                if not games:
-                    return "최근 매치 기록이 없어요."
-
-                result = f"{nickname} 최근 매치:\n"
-                for g in games:
-                    result += (
-                        f"- 캐릭터: {g.get('characterNum')} "
-                        f"| 순위: {g.get('gameRank')}등 "
-                        f"| 킬: {g.get('playerKill')} "
-                        f"| 데미지: {g.get('damageToPlayer')}\n"
-                    )
-                return result
-
-            # 랭킹 조회
-            elif "랭킹" in q or "랭크" in q or "순위" in q:
-                rank_data = _get_sync("/v1/rank/top?seasonId=0&matchingTeamMode=1")
-                if rank_data.get("code") != 200:
-                    return "랭킹 데이터를 가져올 수 없어요."
-                tops = rank_data.get("topRanks", [])[:5]
-                result = "현재 솔로 랭킹 TOP 5:\n"
+            # 탑 랭커
+            if "탑" in q or "랭킹" in q or "top" in q or "1등" in q or "순위" in q:
+                data = _get(f"/rank/top/{api_id}/{mode}")
+                if data.get("code") != 200:
+                    return f"탑 랭커 조회 실패: {data.get('message')}"
+                tops   = data.get("topRanks", [])[:5]
+                result = f"{season}시즌 {mode_str} TOP {len(tops)}:\n"
                 for r in tops:
-                    result += f"- {r.get('rank')}위: {r.get('nickname')} (MMR: {r.get('mmr')})\n"
+                    result += f"- {r['rank']}위: {r['nickname']} (MMR: {r['mmr']})\n"
                 return result
 
-            # 캐릭터/게임 메타 데이터
-            elif "캐릭터" in q or "메타" in q or "픽률" in q:
-                meta_data = _get_sync("/v1/data/Character")
-                if meta_data.get("code") != 200:
-                    return "캐릭터 데이터를 가져올 수 없어요."
-                chars = meta_data.get("data", [])
-                # 쿼리에 특정 캐릭터 이름 있으면 필터
-                names = [c.get("name", {}).get("Korean", "") for c in chars]
-                matched = [n for n in names if any(kw in q for kw in [n.lower(), n])]
-                if matched:
-                    return f"캐릭터 검색 결과: {', '.join(matched[:5])}"
-                return f"전체 캐릭터 수: {len(chars)}명"
+            # 유저 랭크
+            nickname = _parse_nickname(query)
+            user_id  = _get_user_id(nickname)
+            if not user_id:
+                return f"유저 '{nickname}'를 찾을 수 없어요."
 
-            else:
-                return "매치 전적, 랭킹, 캐릭터 정보를 물어봐줘!"
+            data = _get(f"/rank/uid/{user_id}/{api_id}/{mode}")
+            if data.get("code") != 200:
+                return f"랭크 조회 실패: {data.get('message')}"
+
+            r    = data.get("userRank", {})
+            mmr  = r.get("mmr", 0)
+            rank = r.get("rank", 0)
+
+            if mmr == 0 and rank == 0:
+                return f"{nickname}님은 {season}시즌 {mode_str} 랭크 기록이 없어요."
+
+            return f"{nickname} {season}시즌 {mode_str} 랭크: {rank}위 / MMR: {mmr}"
 
         except Exception as e:
             return f"이터널리턴 API 오류: {e}"
