@@ -12,9 +12,9 @@ load_dotenv()
 
 CHUNK     = 1024
 FORMAT    = pyaudio.paInt16
-CHANNELS  = 1
+CHANNELS  = 2
 RATE      = 16000
-SILENCE_THRESHOLD = 500    # 무음 감지 임계값
+SILENCE_THRESHOLD = 1000    # 무음 감지 임계값
 SILENCE_DURATION  = 1.5    # 이 초 동안 무음이면 발화 종료로 판단
 MAX_DURATION      = 30     # 최대 녹음 시간 (초)
 
@@ -29,8 +29,9 @@ def _is_silent(data: bytes) -> bool:
 def _record() -> bytes | None:
     """말하는 동안 녹음, 무음 감지되면 종료"""
     pa      = pyaudio.PyAudio()
-    stream  = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE,
-                      input=True, frames_per_buffer=CHUNK)
+    stream = pa.open(format=FORMAT, channels=CHANNELS, rate=RATE,
+                 input=True, frames_per_buffer=CHUNK,
+                 input_device_index=0)  # 0번 MATA STUDIO C10
     frames  = []
     silent_chunks  = 0
     speaking       = False

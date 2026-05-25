@@ -42,9 +42,9 @@ class ChzzkReader:
         self.topic                 = topic
         self.controller            = None
         self.news_enabled          = False
-        self.shake_enabled = False
         self.news_topic            = "IT 기술"
         self.last_news_hour        = -1
+        self.shake_enabled         = False
         self.llm                   = ChatGroq(
             model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY"),
@@ -111,7 +111,7 @@ class ChzzkReader:
 
                 async def ping_loop():
                     while True:
-                        await asyncio.sleep(20)  # 30 → 20으로 줄임
+                        await asyncio.sleep(20)
                         try:
                             await ws.send_str(json.dumps({"ver": "2", "cmd": 0}))
                         except Exception as e:
@@ -164,16 +164,46 @@ class ChzzkReader:
                 try:
                     profile  = json.loads(donation.get("profile", "{}"))
                     nickname = profile.get("nickname", "익명")
-                    amount   = donation.get("extras", {}).get("payAmount", 0)
                     content  = donation.get("msg", "")
-                    print(f"[도네] {nickname}: {amount}원 {content}")
+                    print(f"[도네] {nickname}: {content}")
                     self.buffer.insert(0, (
                         nickname,
-                        f"[도네 {amount}원] {content}" if content else f"[도네 {amount}원]",
+                        f"[도네] {content}" if content else "[도네]",
                         time.time()
                     ))
                 except Exception as e:
                     print(f"[도네 파싱 오류] {e}")
+
+        elif cmd == 93105:
+            # 구독
+            for sub in data.get("bdy", []):
+                try:
+                    profile  = json.loads(sub.get("profile", "{}"))
+                    nickname = profile.get("nickname", "익명")
+
+                    extras = sub.get("extras", {})
+                    if isinstance(extras, str):
+                        try:
+                            extras = json.loads(extras)
+                        except:
+                            extras = {}
+
+                    # 구독 선물 여부
+                    is_gift = extras.get("isGift", False)
+                    print(f"[구독] {nickname} {'구독 선물' if is_gift else '구독'}")
+
+                    if self.subscription_callback:
+                        asyncio.create_task(
+                            self.subscription_callback(nickname, gift=is_gift)
+                        )
+                    else:
+                        self.buffer.insert(0, (
+                            nickname,
+                            "[구독 선물]" if is_gift else "[구독]",
+                            time.time()
+                        ))
+                except Exception as e:
+                    print(f"[구독 파싱 오류] {e}")
 
     async def _run_news_briefing(self):
         print(f"[뉴스] 브리핑 시작: {self.news_topic}")

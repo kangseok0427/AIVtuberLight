@@ -54,8 +54,8 @@ async def main():
             return
         # ───────────────────────────────────────────────
 
-        if content.startswith("[도네"):
-            user_input = f"{nickname}님이 {content} 후원해주셨어요!"
+        if content.startswith("[도네]"):
+            user_input = f"{nickname}님이 도네이션 해주셨어요! {content[5:].strip()}"
         elif content == "[구독]":
             user_input = f"{nickname}님이 구독해주셨어요!"
         elif content == "[구독 선물]":

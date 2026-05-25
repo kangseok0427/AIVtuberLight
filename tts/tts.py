@@ -14,7 +14,7 @@ VOICE      = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")
 PITCH      = os.getenv("TTS_PITCH", "+20Hz")
 RATE       = os.getenv("TTS_RATE", "+5%")
 TTS_OUTPUT = os.path.join(tempfile.gettempdir(), "tts_output.mp3")
-DEVICE_INDEX = 1  # VB-Cable 고정
+DEVICE_INDEX = 1  # VB-Cable 고정 1 or 3 (환경에 따라 다름, 확인 필요)
 
 def clean_text(text: str) -> str:
     text = re.sub(r'[^\uAC00-\uD7A3\u3131-\u318Ea-zA-Z0-9\s,.!?~]', '', text)
