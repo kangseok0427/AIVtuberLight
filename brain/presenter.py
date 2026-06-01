@@ -4,6 +4,7 @@ import subprocess
 import fitz
 from pathlib import Path
 
+
 class PDFPresenter:
     def __init__(self, reader, main_loop):
         self.reader    = reader
@@ -28,12 +29,9 @@ class PDFPresenter:
         return len(self.slides)
 
     def _open_preview(self):
-        """Preview로 PDF 열기"""
         subprocess.Popen(["open", "-a", "Preview", self.pdf_path])
-        asyncio.get_event_loop().call_later(2, lambda: None)  # 열릴 때까지 잠깐 대기
 
     def _next_page_preview(self):
-        """Preview 다음 페이지로 넘기기"""
         subprocess.run(["osascript", "-e", '''
 tell application "Preview"
     activate
@@ -70,6 +68,38 @@ end tell
                 " ".join(words[t2:])
             ]
 
+    def _build_prompt(
+        self,
+        slide_num: int,
+        total: int,
+        chunk_idx: int,
+        total_chunks: int,
+        chunk_text: str,
+    ) -> str:
+        # 슬라이드 위치별 접두어
+        if slide_num == 1 and chunk_idx == 0:
+            position = "발표 첫 번째 슬라이드야. 시청자한테 발표 시작을 알리고 바로 내용 설명으로 들어가."
+        elif slide_num == total and chunk_idx == total_chunks - 1:
+            position = "마지막 슬라이드야. 내용 설명 후 발표 마무리 멘트도 자연스럽게 붙여줘."
+        elif chunk_idx == 0:
+            position = f"{slide_num}번째 슬라이드로 넘어왔어."
+        else:
+            position = f"{slide_num}번째 슬라이드 이어서 설명하는 부분이야."
+
+        return (
+            f"[발표 모드 - {slide_num}/{total}번 슬라이드, {chunk_idx+1}/{total_chunks}]\n"
+            f"슬라이드 내용:\n{chunk_text}\n\n"
+            f"## 지시사항\n"
+            f"{position}\n"
+            f"지금 이 슬라이드 내용을 시청자한테 발표자처럼 설명해야 해.\n\n"
+            f"반드시 지킬 것:\n"
+            f"1. 슬라이드에 있는 핵심 내용을 빠짐없이 다 짚어줘\n"
+            f"2. 각 항목이 뭔지, 왜 중요한지, 어떻게 동작하는지 네 말로 풀어서 설명해\n"
+            f"3. 단순 리액션('오 신기하다', '이거 재밌죠') 금지 — 내용 설명이 메인이야\n"
+            f"4. 발표 말투로, 4~6문장으로 충분히 설명해\n"
+            f"5. 캐릭터는 유지하되 이 슬라이드에서는 설명 완성도가 최우선\n"
+        )
+
     def toggle_pause(self):
         self.paused = not self.paused
         state = "일시정지" if self.paused else "재개"
@@ -85,9 +115,8 @@ end tell
         self.running = True
         self.current = 0
 
-        # Preview로 PDF 열기
         self._open_preview()
-        await asyncio.sleep(2)  # Preview 열릴 때까지 대기
+        await asyncio.sleep(2)
 
         for i, slide_text in enumerate(self.slides):
             if not self.running:
@@ -96,23 +125,22 @@ end tell
             self.current = i + 1
             print(f"[발표] 슬라이드 {self.current}/{len(self.slides)}")
 
-            # 텍스트 분할
             chunks = self._split_text(slide_text)
 
             for j, chunk in enumerate(chunks):
                 if not self.running:
                     return
 
-                prompt = (
-                    f"[발표 {self.current}/{len(self.slides)}번 슬라이드 - {j+1}/{len(chunks)}]\n"
-                    f"{chunk}\n\n"
-                    f"지금 이 내용 보면서 방송 중이야. "
-                    f"보면서 생각나는 거 즉흥으로 시청자한테 얘기해줘. "
-                    f"1~2문장으로 짧게."
+                prompt = self._build_prompt(
+                    slide_num=self.current,
+                    total=len(self.slides),
+                    chunk_idx=j,
+                    total_chunks=len(chunks),
+                    chunk_text=chunk,
                 )
                 await callback("발표", prompt)
 
-            # 30초 대기 (일시정지 포함)
+            # 슬라이드당 대기 (일시정지 포함)
             elapsed = 0
             while elapsed < self.qa_wait:
                 if not self.running:
@@ -121,10 +149,10 @@ end tell
                     elapsed += 1
                 await asyncio.sleep(1)
 
-            # 다음 슬라이드로 Preview 넘기기
+            # 다음 슬라이드 넘기기
             if self.running and i < len(self.slides) - 1:
                 self._next_page_preview()
 
         if self.running:
-            await callback("발표", f"[발표 종료] 총 {len(self.slides)}장 발표 완료!")
+            await callback("발표", "[발표 종료] 발표 다 끝났어! 시청자들한테 마무리 인사 해줘.")
             self.running = False

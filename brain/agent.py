@@ -110,20 +110,22 @@ def think_node(state: VTuberState) -> VTuberState:
 # 노드 2 - answer
 def load_snake_context() -> str:
     try:
-        import json
         with open("/Users/lucas/snake_ai/game_state.json", "r") as f:
             state = json.load(f)
-        return load_prompt("snake.txt",
+        result = load_prompt("snake.txt",
             episode=state["episode"],
             score=state["score"],
             best_score=state["best_score"],
             loss=round(state["loss"], 4),
             epsilon=round(state["epsilon"], 2),
             avg_score=state["avg_score"],
-            alive="살아있음" if state["alive"] else "죽음",
+            alive="살아있음" if state.get("alive", True) else "죽음",
             event=state.get("event", "null")
         )
-    except:
+        print(f"[Snake] 컨텍스트 로드됨: ep={state['episode']} score={state['score']}")  # 추가
+        return result
+    except Exception as e:
+        print(f"[Snake] 오류: {e}")  # 추가
         return ""
 
 def answer_node(state: VTuberState) -> VTuberState:
