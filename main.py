@@ -5,7 +5,7 @@ import random
 import threading
 import signal
 from dotenv import load_dotenv
-from brain.agent import agent, update_obs
+from brain.agent import agent, update_obs, memory_tool
 
 load_dotenv()
 
@@ -80,6 +80,13 @@ async def main():
 
         print(f"😊 감정: {result['emotion']} → {result['vtube_expression']}")
         print(f"🎤 {NAME}: {result['answer']}\n")
+
+        # 메모리 저장 — 백그라운드에서 처리 (TTS 블로킹 방지)
+        threading.Thread(
+            target=memory_tool.save,
+            args=(user_input, result["answer"]),
+            daemon=True
+        ).start()
 
         await asyncio.gather(
             bridge.trigger_and_reset(result["vtube_expression"], duration=5.0),

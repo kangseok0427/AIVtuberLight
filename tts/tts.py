@@ -1,7 +1,9 @@
 # tts/tts.py
 import os
 import re
+import asyncio
 import tempfile
+import time
 import edge_tts
 import soundfile as sf
 import numpy as np
@@ -10,11 +12,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VOICE      = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")
-PITCH      = os.getenv("TTS_PITCH", "+20Hz")
-RATE       = os.getenv("TTS_RATE", "+5%")
-TTS_OUTPUT = os.path.join(tempfile.gettempdir(), "tts_output.mp3")
-DEVICE_INDEX = 1  # VB-Cable 고정 1 or 3 (환경에 따라 다름, 확인 필요)
+VOICE        = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")
+PITCH        = os.getenv("TTS_PITCH", "+20Hz")
+RATE         = os.getenv("TTS_RATE", "+5%")
+TTS_OUTPUT   = os.path.join(tempfile.gettempdir(), "tts_output.mp3")
+DEVICE_INDEX = 1
 
 def clean_text(text: str) -> str:
     text = re.sub(r'[^\uAC00-\uD7A3\u3131-\u318Ea-zA-Z0-9\s,.!?~]', '', text)
@@ -34,6 +36,14 @@ async def text_to_speech(text: str):
     clean = clean_text(text)
     if not clean:
         return
+
+    t0 = time.time()
     communicate = edge_tts.Communicate(clean, VOICE, pitch=PITCH, rate=RATE)
     await communicate.save(TTS_OUTPUT)
-    play_audio(TTS_OUTPUT)
+    t1 = time.time()
+    print(f"[TTS] 변환 완료: {t1-t0:.2f}초")
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, play_audio, TTS_OUTPUT)
+    t2 = time.time()
+    print(f"[TTS] 재생 완료: {t2-t1:.2f}초")

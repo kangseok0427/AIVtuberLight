@@ -4,6 +4,7 @@ import re
 import asyncio
 import json
 import random
+import threading
 from dotenv import load_dotenv
 from typing import TypedDict, Literal, Annotated
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -33,13 +34,11 @@ llm_answer           = get_answer_llm()
 llm_think_with_tools = get_think_llm_with_tools(llm_think, tools)
 
 
-# 프롬프트 로더
 def load_prompt(filename: str, **kwargs) -> str:
     with open(f"prompts/{filename}", "r", encoding="utf-8") as f:
         return f.read().format(**kwargs)
 
 
-# 최근 대화 컨텍스트 — think / answer 둘 다 씀
 def _get_memory_context(limit: int) -> str:
     try:
         all_results = memory_tool.db.get()
@@ -55,7 +54,6 @@ def _get_memory_context(limit: int) -> str:
         return ""
 
 
-# 상태 정의
 class VTuberState(TypedDict):
     user_input:       str
     messages:         Annotated[list, add_messages]
@@ -64,7 +62,6 @@ class VTuberState(TypedDict):
     answer:           str
 
 
-# 감정 맵
 EMOTION_MAP = {
     "happy":     "Exp7 Laugh",
     "love":      "Exp2 Heart",
@@ -131,7 +128,6 @@ def load_snake_context() -> str:
         return ""
 
 
-# 노드 1 — think
 def think_node(state: VTuberState) -> VTuberState:
     print(f"[Think] 시작: '{state['user_input'][:30]}'")
     memory_context = _get_memory_context(limit=3)
@@ -149,7 +145,6 @@ def think_node(state: VTuberState) -> VTuberState:
     return {**state, "messages": [system, human, response]}
 
 
-# 노드 2 — answer
 def answer_node(state: VTuberState) -> VTuberState:
     print(f"[Answer] 시작")
     try:
@@ -158,13 +153,11 @@ def answer_node(state: VTuberState) -> VTuberState:
             content=load_prompt("answer.txt", NAME=NAME) + "\n\n" + snake_context
         )
 
-        # 툴 결과 수집
         tool_results = ""
         for msg in state["messages"]:
             if hasattr(msg, "type") and msg.type == "tool":
                 tool_results += f"\n{msg.content}"
 
-        # 유저 입력 추출
         user_content = ""
         for msg in state["messages"]:
             if isinstance(msg, HumanMessage):
@@ -174,7 +167,6 @@ def answer_node(state: VTuberState) -> VTuberState:
         if tool_results:
             user_content += f"\n\n[검색 결과]{tool_results}"
 
-        # 최근 대화 맥락
         user_content += _get_memory_context(limit=5)
 
         human    = HumanMessage(content=user_content)
@@ -182,7 +174,6 @@ def answer_node(state: VTuberState) -> VTuberState:
         answer   = response.content
         print(f"[Answer] LLM 응답 완료")
 
-        # 명확화 요청 처리
         clarification = re.search(r'\[NEED_CLARIFICATION:(.*?)\]', answer)
         if clarification:
             question = clarification.group(1).strip()
@@ -197,12 +188,11 @@ def answer_node(state: VTuberState) -> VTuberState:
     print(f"[Answer] 감정: {emotion} / 표정: {vtube_expression}")
 
     update_obs(clean_answer)
-    memory_tool.save(state["user_input"], clean_answer)
+    # memory 저장은 main.py에서 백그라운드로 처리
 
     return {**state, "answer": clean_answer, "emotion": emotion, "vtube_expression": vtube_expression}
 
 
-# 그래프 조립
 def should_use_tools(state: VTuberState) -> Literal["tools", "answer"]:
     last_msg = state["messages"][-1]
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
