@@ -11,6 +11,7 @@ VTUBE_WS_URL = "ws://localhost:8001"
 PLUGIN_NAME  = "GaonAI"
 PLUGIN_DEV   = "Gaon"
 
+
 class VTubeBridge:
     def __init__(self):
         self.ws         = None
@@ -25,6 +26,16 @@ class VTubeBridge:
         await self.ws.send(json.dumps(payload))
         resp = await self.ws.recv()
         return json.loads(resp)
+
+    async def _reconnect(self):
+        """연결 끊겼을 때 재연결 시도"""
+        print("[VTube] 재연결 시도...")
+        try:
+            await self.connect()
+            print("[VTube] 재연결 성공!")
+        except Exception as e:
+            print(f"[VTube] 재연결 실패: {e}")
+            raise
 
     async def _authenticate(self):
         if not self.auth_token:
@@ -74,8 +85,8 @@ class VTubeBridge:
         return resp["data"]["expressions"]
 
     async def set_expression(self, expression_name: str) -> None:
-        print(f"[VTube] 표정 시도: {expression_name}.exp3.json")
-        await self.ws.send(json.dumps({
+        print(f"[VTube] 표정 켜기: {expression_name}.exp3.json")
+        await self._send({
             "apiName": "VTubeStudioPublicAPI",
             "apiVersion": "1.0",
             "requestID": "expr_on",
@@ -84,11 +95,11 @@ class VTubeBridge:
                 "expressionFile": f"{expression_name}.exp3.json",
                 "active": True
             }
-        }))
-        await self.ws.recv()
+        })
 
     async def reset_expression(self, expression_name: str) -> None:
-        await self.ws.send(json.dumps({
+        print(f"[VTube] 표정 끄기: {expression_name}.exp3.json")
+        await self._send({
             "apiName": "VTubeStudioPublicAPI",
             "apiVersion": "1.0",
             "requestID": "expr_off",
@@ -97,8 +108,7 @@ class VTubeBridge:
                 "expressionFile": f"{expression_name}.exp3.json",
                 "active": False
             }
-        }))
-        await self.ws.recv()
+        })
 
     async def trigger_and_reset(self, expression_name: str | None, duration: float = 3.0) -> None:
         if not expression_name:
@@ -108,51 +118,62 @@ class VTubeBridge:
             await asyncio.sleep(duration)
             await self.reset_expression(expression_name)
         except websockets.exceptions.ConnectionClosedError:
-            print("[VTube] 연결 끊김, 재연결 시도...")
-            await self.connect()
-            await self.set_expression(expression_name)
-            await asyncio.sleep(duration)
-            await self.reset_expression(expression_name)
+            print("[VTube] 연결 끊김 — 재연결 후 재시도...")
+            try:
+                await self._reconnect()
+                await self.set_expression(expression_name)
+                await asyncio.sleep(duration)
+                await self.reset_expression(expression_name)
+            except Exception as e:
+                print(f"[VTube] trigger_and_reset 재시도 실패: {e}")
 
     async def shake(self, duration: float = 2.0, intensity: float = 1.0):
-        print(f"[VTube] 흔들기 시작! {duration}초")
+        print(f"[VTube] 흔들기 시작! {duration}초 / intensity: {intensity}")
         end_time = asyncio.get_event_loop().time() + duration
         toggle = 1
 
-        while asyncio.get_event_loop().time() < end_time:
-            await self.ws.send(json.dumps({
+        try:
+            while asyncio.get_event_loop().time() < end_time:
+                await self._send({
+                    "apiName": "VTubeStudioPublicAPI",
+                    "apiVersion": "1.0",
+                    "requestID": "shake",
+                    "messageType": "InjectParameterDataRequest",
+                    "data": {
+                        "faceFound": False,
+                        "mode": "set",
+                        "parameterValues": [
+                            {"id": "FaceAngleX", "value": intensity * 30 * toggle}
+                        ]
+                    }
+                })
+                toggle *= -1
+                await asyncio.sleep(0.08)
+
+            # 흔들기 후 원위치
+            await self._send({
                 "apiName": "VTubeStudioPublicAPI",
                 "apiVersion": "1.0",
-                "requestID": "shake",
+                "requestID": "shake_reset",
                 "messageType": "InjectParameterDataRequest",
                 "data": {
                     "faceFound": False,
                     "mode": "set",
                     "parameterValues": [
-                        {"id": "FaceAngleX", "value": intensity * 30 * toggle}
+                        {"id": "FaceAngleX", "value": 0}
                     ]
                 }
-            }))
-            await self.ws.recv()
-            toggle *= -1
-            await asyncio.sleep(0.08)
+            })
+            print("[VTube] 흔들기 종료")
 
-        await self.ws.send(json.dumps({
-            "apiName": "VTubeStudioPublicAPI",
-            "apiVersion": "1.0",
-            "requestID": "shake_reset",
-            "messageType": "InjectParameterDataRequest",
-            "data": {
-                "faceFound": False,
-                "mode": "set",
-                "parameterValues": [
-                    {"id": "FaceAngleX", "value": 0}
-                ]
-            }
-        }))
-        await self.ws.recv()
-        print("[VTube] 흔들기 종료")
+        except websockets.exceptions.ConnectionClosedError:
+            print("[VTube] 흔들기 중 연결 끊김 — 재연결 시도...")
+            try:
+                await self._reconnect()
+            except Exception as e:
+                print(f"[VTube] 흔들기 재연결 실패: {e}")
 
     async def disconnect(self) -> None:
         if self.ws:
             await self.ws.close()
+            print("[VTube] 연결 종료")

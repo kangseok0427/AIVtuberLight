@@ -9,9 +9,9 @@ import time
 import random
 from datetime import datetime
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from control.filter import check_chat
+from brain.llm_config import get_topic_llm
 
 load_dotenv()
 
@@ -24,6 +24,7 @@ BUFFER_MAX = 20
 API_BASE  = "https://api.chzzk.naver.com"
 GAME_BASE = "https://comm-api.game.naver.com/nng_main"
 WS_URL    = "wss://kr-ss1.chat.naver.com/chat"
+
 
 def _is_emoji_only(text: str) -> bool:
     cleaned = re.sub(r'\{:[^}]+:\}', '', text).strip()
@@ -45,12 +46,7 @@ class ChzzkReader:
         self.news_topic            = "IT 기술"
         self.last_news_hour        = -1
         self.shake_enabled         = False
-        self.llm                   = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=os.getenv("GROQ_API_KEY"),
-            temperature=0.1,
-            max_tokens=10,
-        )
+        self.llm                   = get_topic_llm()
         self.cookies = {
             "NID_AUT": NID_AUT,
             "NID_SES": NID_SES,
@@ -140,7 +136,7 @@ class ChzzkReader:
                         return
 
                     if _is_emoji_only(content):
-                        print(f"[필터] 이모티콘: {nickname}: {content}")
+                        print(f"[필터] 이모티콘만: {nickname}: {content}")
                         return
 
                     reason = check_chat(nickname, content)
@@ -175,7 +171,6 @@ class ChzzkReader:
                     print(f"[도네 파싱 오류] {e}")
 
         elif cmd == 93105:
-            # 구독
             for sub in data.get("bdy", []):
                 try:
                     profile  = json.loads(sub.get("profile", "{}"))
@@ -185,10 +180,10 @@ class ChzzkReader:
                     if isinstance(extras, str):
                         try:
                             extras = json.loads(extras)
-                        except:
+                        except json.JSONDecodeError as e:
+                            print(f"[구독] extras 파싱 실패: {e}")
                             extras = {}
 
-                    # 구독 선물 여부
                     is_gift = extras.get("isGift", False)
                     print(f"[구독] {nickname} {'구독 선물' if is_gift else '구독'}")
 
@@ -238,22 +233,23 @@ Which message number is most relevant to the topic? Reply with just the number."
             response = self.llm.invoke([system, human])
             idx = int(response.content.strip()) - 1
             idx = max(0, min(idx, len(candidates) - 1))
+            print(f"[토픽] LLM 선택: {idx+1}번 — {candidates[idx][0]}: {candidates[idx][1]}")
             return candidates[idx]
-        except:
+        except Exception as e:
+            print(f"[토픽] LLM 선택 실패, 랜덤 fallback: {e}")
             return random.choice(candidates)
 
     async def pick_and_respond(self):
         while True:
             await asyncio.sleep(0.5)
 
-            # ── 정시 뉴스 브리핑 체크 ─────────────────────
+            # 정시 뉴스 브리핑 체크
             if self.news_enabled and not self.is_busy:
                 now_dt = datetime.now()
                 if now_dt.minute == 0 and now_dt.hour != self.last_news_hour:
                     self.last_news_hour = now_dt.hour
                     asyncio.create_task(self._run_news_briefing())
                     continue
-            # ───────────────────────────────────────────────
 
             if self.is_busy:
                 continue
@@ -268,6 +264,7 @@ Which message number is most relevant to the topic? Reply with just the number."
             if not self.buffer:
                 continue
 
+            # 만료된 채팅 제거
             now_ts = time.time()
             self.buffer = [
                 item for item in self.buffer

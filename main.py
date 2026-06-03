@@ -5,11 +5,12 @@ import random
 import threading
 import signal
 from dotenv import load_dotenv
-from brain.agent import agent, NAME, detect_emotion, update_obs
+from brain.agent import agent, update_obs
 
 load_dotenv()
 
 NAME = os.getenv("VTUBER_NAME")
+
 
 async def main():
     from avatar.vtube_bridge import VTubeBridge
@@ -33,7 +34,7 @@ async def main():
     main_loop = asyncio.get_event_loop()
 
     async def handle_chat(nickname: str, content: str):
-        # ── shake 키워드 감지 ──────────────────────────
+        # shake 키워드 감지
         if reader.shake_enabled and content.strip().lower() == "shake":
             print(f"[흔들기] {nickname} shake!")
             reactions = [
@@ -52,7 +53,6 @@ async def main():
                 text_to_speech(msg)
             )
             return
-        # ───────────────────────────────────────────────
 
         if content.startswith("[도네]"):
             user_input = f"{nickname}님이 도네이션 해주셨어요! {content[5:].strip()}"
@@ -63,10 +63,9 @@ async def main():
         else:
             user_input = f"{nickname}: {content}"
 
-        loop = asyncio.get_event_loop()
         try:
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: agent.invoke({
+                main_loop.run_in_executor(None, lambda: agent.invoke({
                     "user_input":       user_input,
                     "messages":         [],
                     "emotion":          "",
@@ -114,7 +113,6 @@ async def main():
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
 
-    # ── 모드 분기 ──────────────────────────────────────
     if mode == "1":
         from voice.listener import voice_loop
         asyncio.create_task(voice_loop(handle_chat, name="개발자"))
@@ -122,7 +120,7 @@ async def main():
         await asyncio.Event().wait()
     else:
         await reader.start()
-    # ───────────────────────────────────────────────────
+
 
 if __name__ == "__main__":
     asyncio.run(main())

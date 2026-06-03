@@ -6,42 +6,64 @@ from pathlib import Path
 
 
 class PDFPresenter:
-    def __init__(self, reader, main_loop):
-        self.reader    = reader
-        self.main_loop = main_loop
-        self.slides    = []
-        self.running   = False
-        self.paused    = False
-        self.current   = 0
-        self.qa_wait   = 30  # 슬라이드당 질문 대기 시간 (초)
-        self.pdf_path  = None
+    def __init__(self):
+        self.slides   = []
+        self.running  = False
+        self.paused   = False
+        self.current  = 0
+        self.qa_wait  = 10   # 슬라이드당 질문 대기 시간 (초)
+        self.pdf_path = None
+        # 슬라이드 인덱스 → 실제 PDF 페이지 번호 매핑
+        # 이미지만 있는 페이지 스킵해도 Preview 페이지 넘김이 어긋나지 않게
+        self.page_indices: list[int] = []
 
     def load(self, path: str) -> int:
-        self.pdf_path = path
+        self.pdf_path    = path
+        self.slides      = []
+        self.page_indices = []
+
         doc = fitz.open(path)
-        self.slides = []
-        for page in doc:
+        for page_num, page in enumerate(doc):
             text = page.get_text().strip()
             if text:
                 self.slides.append(text)
+                self.page_indices.append(page_num)  # 실제 페이지 번호 기록
+            else:
+                print(f"[발표] 페이지 {page_num + 1} 텍스트 없음 — 이미지 전용 슬라이드로 처리")
         doc.close()
-        print(f"[발표] {len(self.slides)}장 로드 완료")
+
+        print(f"[발표] {len(self.slides)}장 로드 완료 (전체 {doc.page_count}페이지)")
         return len(self.slides)
 
-    def _open_preview(self):
-        subprocess.Popen(["open", "-a", "Preview", self.pdf_path])
+    async def _open_preview(self):
+        proc = await asyncio.create_subprocess_exec(
+            "open", "-a", "Preview", self.pdf_path
+        )
+        await proc.wait()
 
-    def _next_page_preview(self):
-        subprocess.run(["osascript", "-e", '''
+    async def _goto_page_preview(self, page_num: int):
+        """Preview에서 특정 페이지로 이동 — 실제 PDF 페이지 번호 기준"""
+        # AppleScript로 페이지 번호 직접 입력
+        script = f'''
 tell application "Preview"
     activate
 end tell
 tell application "System Events"
     tell process "Preview"
-        key code 124
+        keystroke "g" using command down
+        delay 0.3
+        keystroke "{page_num + 1}"
+        key code 36
     end tell
 end tell
-'''])
+'''
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", script,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        print(f"[발표] Preview 페이지 이동: {page_num + 1}페이지")
 
     def _split_text(self, text: str) -> list[str]:
         """
@@ -76,7 +98,6 @@ end tell
         total_chunks: int,
         chunk_text: str,
     ) -> str:
-        # 슬라이드 위치별 접두어
         if slide_num == 1 and chunk_idx == 0:
             position = "발표 첫 번째 슬라이드야. 시청자한테 발표 시작을 알리고 바로 내용 설명으로 들어가."
         elif slide_num == total and chunk_idx == total_chunks - 1:
@@ -115,15 +136,19 @@ end tell
         self.running = True
         self.current = 0
 
-        self._open_preview()
+        await self._open_preview()
         await asyncio.sleep(2)
+
+        # 첫 슬라이드로 이동
+        if self.page_indices:
+            await self._goto_page_preview(self.page_indices[0])
 
         for i, slide_text in enumerate(self.slides):
             if not self.running:
                 break
 
             self.current = i + 1
-            print(f"[발표] 슬라이드 {self.current}/{len(self.slides)}")
+            print(f"[발표] 슬라이드 {self.current}/{len(self.slides)} (PDF {self.page_indices[i]+1}페이지)")
 
             chunks = self._split_text(slide_text)
 
@@ -149,9 +174,10 @@ end tell
                     elapsed += 1
                 await asyncio.sleep(1)
 
-            # 다음 슬라이드 넘기기
+            # 다음 슬라이드로 이동 — 실제 페이지 번호 기준
             if self.running and i < len(self.slides) - 1:
-                self._next_page_preview()
+                next_page = self.page_indices[i + 1]
+                await self._goto_page_preview(next_page)
 
         if self.running:
             await callback("발표", "[발표 종료] 발표 다 끝났어! 시청자들한테 마무리 인사 해줘.")
