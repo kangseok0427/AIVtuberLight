@@ -13,6 +13,7 @@ def get_think_llm():
             model=os.getenv("OLLAMA_THINK_MODEL"),
             base_url=os.getenv("OLLAMA_BASE_URL"),
             temperature=float(os.getenv("VTUBER_THINK_TEMP")),
+            num_predict=4000,
         )
     else:
         from langchain_groq import ChatGroq
@@ -20,7 +21,7 @@ def get_think_llm():
             model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=float(os.getenv("VTUBER_THINK_TEMP")),
-            max_tokens=1024,
+            max_tokens=4000,
         )
 
 
@@ -31,6 +32,7 @@ def get_answer_llm():
             model=os.getenv("OLLAMA_ANSWER_MODEL"),
             base_url=os.getenv("OLLAMA_BASE_URL"),
             temperature=float(os.getenv("VTUBER_ANSWER_TEMP")),
+            num_predict=4000,
         )
     else:
         from langchain_groq import ChatGroq
@@ -38,7 +40,7 @@ def get_answer_llm():
             model="llama-3.1-8b-instant",
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=float(os.getenv("VTUBER_ANSWER_TEMP")),
-            max_tokens=1024,
+            max_tokens=4000,
         )
 
 
@@ -50,6 +52,7 @@ def get_wiki_llm():
             model=os.getenv("OLLAMA_ANSWER_MODEL"),
             base_url=os.getenv("OLLAMA_BASE_URL"),
             temperature=0.1,
+            num_predict=4000,
         )
     else:
         from langchain_groq import ChatGroq
@@ -57,7 +60,7 @@ def get_wiki_llm():
             model="llama-3.1-8b-instant",
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=0.1,
-            max_tokens=256,
+            max_tokens=4000,
         )
 
 
@@ -69,6 +72,7 @@ def get_topic_llm():
             model=os.getenv("OLLAMA_ANSWER_MODEL"),
             base_url=os.getenv("OLLAMA_BASE_URL"),
             temperature=0.1,
+            num_predict=10,
         )
     else:
         from langchain_groq import ChatGroq

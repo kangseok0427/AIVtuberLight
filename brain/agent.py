@@ -54,12 +54,38 @@ def _get_memory_context(limit: int) -> str:
         return ""
 
 
+def load_game_context() -> str:
+    try:
+        with open("/Users/lucas/MechanicoC/checkpoints/mechanico_status.json", "r") as f:
+            state = json.load(f)
+        result = load_prompt("game.txt",
+            episode=state.get("episode", 0),
+            total_steps=state.get("total_steps", 0),
+            stage=state.get("stage", "?"),
+            zone=state.get("zone", 0),
+            cleared=state.get("cleared", 0),
+            gold=state.get("gold", 0),
+            party_alive=", ".join(state.get("party_alive", [])) or "없음",
+            party_ko=", ".join(state.get("party_ko", [])) or "없음",
+            loss=round(state.get("loss", 0), 4),
+            epsilon=round(state.get("epsilon", 1), 2),
+            avg_reward=round(state.get("avg_reward", 0), 3),
+            event=state.get("event", "없음"),
+        )
+        print(f"[Game] 컨텍스트 로드됨: ep={state.get('episode')} stage={state.get('stage')} event={state.get('event')}")
+        return result
+    except Exception as e:
+        print(f"[Game] 컨텍스트 로드 실패: {e}")
+        return ""
+
+
 class VTuberState(TypedDict):
     user_input:       str
     messages:         Annotated[list, add_messages]
     emotion:          str
     vtube_expression: str | None
     answer:           str
+    is_fallback:      bool
 
 
 EMOTION_MAP = {
@@ -107,27 +133,6 @@ def update_obs(text: str):
         print(f"[OBS] 오버레이 업데이트 실패: {e}")
 
 
-def load_snake_context() -> str:
-    try:
-        with open("/Users/lucas/snake_ai/game_state.json", "r") as f:
-            state = json.load(f)
-        result = load_prompt("snake.txt",
-            episode=state["episode"],
-            score=state["score"],
-            best_score=state["best_score"],
-            loss=round(state["loss"], 4),
-            epsilon=round(state["epsilon"], 2),
-            avg_score=state["avg_score"],
-            alive="살아있음" if state.get("alive", True) else "죽음",
-            event=state.get("event", "null")
-        )
-        print(f"[Snake] 컨텍스트 로드됨: ep={state['episode']} score={state['score']}")
-        return result
-    except Exception as e:
-        print(f"[Snake] 컨텍스트 로드 실패: {e}")
-        return ""
-
-
 def think_node(state: VTuberState) -> VTuberState:
     print(f"[Think] 시작: '{state['user_input'][:30]}'")
     memory_context = _get_memory_context(limit=3)
@@ -147,10 +152,12 @@ def think_node(state: VTuberState) -> VTuberState:
 
 def answer_node(state: VTuberState) -> VTuberState:
     print(f"[Answer] 시작")
+    is_fallback = False
+
     try:
-        snake_context = load_snake_context()
+        game_context = load_game_context()
         system = SystemMessage(
-            content=load_prompt("answer.txt", NAME=NAME) + "\n\n" + snake_context
+            content=load_prompt("answer.txt", NAME=NAME) + "\n\n" + game_context
         )
 
         tool_results = ""
@@ -167,7 +174,7 @@ def answer_node(state: VTuberState) -> VTuberState:
         if tool_results:
             user_content += f"\n\n[검색 결과]{tool_results}"
 
-        user_content += _get_memory_context(limit=5)
+        user_content += _get_memory_context(limit=3)
 
         human    = HumanMessage(content=user_content)
         response = llm_answer.invoke([system, human])
@@ -182,15 +189,15 @@ def answer_node(state: VTuberState) -> VTuberState:
     except Exception as e:
         print(f"[Answer] 오류 발생 — fallback 사용: {e}")
         answer = random.choice(FALLBACK_RESPONSES)
+        is_fallback = True
 
     emotion, clean_answer = detect_emotion(answer)
     vtube_expression = EMOTION_MAP.get(emotion, None)
-    print(f"[Answer] 감정: {emotion} / 표정: {vtube_expression}")
+    print(f"[Answer] 감정: {emotion} / 표정: {vtube_expression} / fallback: {is_fallback}")
 
     update_obs(clean_answer)
-    # memory 저장은 main.py에서 백그라운드로 처리
 
-    return {**state, "answer": clean_answer, "emotion": emotion, "vtube_expression": vtube_expression}
+    return {**state, "answer": clean_answer, "emotion": emotion, "vtube_expression": vtube_expression, "is_fallback": is_fallback}
 
 
 def should_use_tools(state: VTuberState) -> Literal["tools", "answer"]:
