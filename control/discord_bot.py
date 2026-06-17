@@ -13,13 +13,12 @@ DISCORD_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
 
 class VTuberController:
     def __init__(self, reader, main_loop: asyncio.AbstractEventLoop):
-        self.reader          = reader
-        self.main_loop       = main_loop
-        self.channel         = None
-        self.presenter       = None
-        self.bridge          = None
-        self.whisper_enabled = True   # 중얼거리기 토글
-        self.set_whisper     = None   # main.py에서 주입
+        self.reader      = reader
+        self.main_loop   = main_loop
+        self.channel     = None
+        self.presenter   = None
+        self.bridge      = None
+        self.set_whisper = None  # main.py에서 주입
 
         intents = discord.Intents.default()
         intents.message_content = True
@@ -30,9 +29,9 @@ class VTuberController:
         if not self.channel:
             return
         embed = discord.Embed(title="🚨 채팅 필터 감지", color=discord.Color.red())
-        embed.add_field(name="유저",  value=username,       inline=True)
-        embed.add_field(name="사유",  value=reason,         inline=True)
-        embed.add_field(name="내용",  value=f"||{text}||",  inline=False)
+        embed.add_field(name="유저", value=username,      inline=True)
+        embed.add_field(name="사유", value=reason,        inline=True)
+        embed.add_field(name="내용", value=f"||{text}||", inline=False)
         asyncio.run_coroutine_threadsafe(
             self.channel.send(embed=embed),
             self.bot.loop
@@ -79,14 +78,12 @@ class VTuberController:
                 f"발표 중 ({self.presenter.current}/{len(self.presenter.slides)}장)"
                 if self.presenter and self.presenter.running else "없음"
             )
-            whisper = "ON" if self.whisper_enabled else "OFF"
             await ctx.send(
                 f"✅ 상태: 정상 운영중\n"
                 f"💬 버퍼: {buf}개 채팅 대기\n"
                 f"🎤 {busy}\n"
                 f"📰 뉴스 브리핑: {news}\n"
-                f"📄 발표: {presenting}\n"
-                f"💭 중얼거리기: {whisper}"
+                f"📄 발표: {presenting}"
             )
 
         @self.bot.command(name="clear")
@@ -147,23 +144,21 @@ class VTuberController:
             await ctx.send("✅ 흔들기 OFF!")
 
         # 중얼거리기
-        @self.bot.command(name="whisper")
-        async def whisper(ctx, *, flag=None):
+        @self.bot.command(name="whisper_on")
+        async def whisper_on(ctx):
             if ctx.channel.id != DISCORD_CHANNEL_ID:
                 return
-            if flag == "on":
-                self.whisper_enabled = True
-                if self.set_whisper:
-                    self.set_whisper(True)
-                await ctx.send("💭 중얼거리기 ON!")
-            elif flag == "off":
-                self.whisper_enabled = False
-                if self.set_whisper:
-                    self.set_whisper(False)
-                await ctx.send("💭 중얼거리기 OFF!")
-            else:
-                state = "ON" if self.whisper_enabled else "OFF"
-                await ctx.send(f"현재 중얼거리기: {state}\n사용법: /whisper on / /whisper off")
+            if self.set_whisper:
+                self.set_whisper(True)
+            await ctx.send("💭 중얼거리기 ON!")
+
+        @self.bot.command(name="whisper_off")
+        async def whisper_off(ctx):
+            if ctx.channel.id != DISCORD_CHANNEL_ID:
+                return
+            if self.set_whisper:
+                self.set_whisper(False)
+            await ctx.send("💭 중얼거리기 OFF!")
 
         # 발표
         @self.bot.command(name="present")
@@ -257,8 +252,8 @@ class VTuberController:
                 "/shake_on — 채팅 shake 감지 ON\n"
                 "/shake_off — 채팅 shake 감지 OFF\n\n"
                 "💭 중얼거리기\n"
-                "/whisper on — 게임 이벤트 자동 반응 ON\n"
-                "/whisper off — 게임 이벤트 자동 반응 OFF\n\n"
+                "/whisper_on — 게임 이벤트 자동 반응 ON\n"
+                "/whisper_off — 게임 이벤트 자동 반응 OFF\n\n"
                 "📄 발표\n"
                 "/present [PDF경로] — 발표 시작\n"
                 "/qa_on — 질문타임 시작 (발표 일시정지)\n"

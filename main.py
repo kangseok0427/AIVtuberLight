@@ -14,7 +14,6 @@ load_dotenv()
 NAME            = os.getenv("VTUBER_NAME")
 GAME_STATE_PATH = "/Users/lucas/MechanicoC/checkpoints/mechanico_status.json"
 
-# 이벤트별 중얼거리기 프롬프트
 WHISPER_PROMPTS = {
     "battle_start":  "[중얼거리기] 전투 시작됐어. 현재 게임 상태 보면서 짧게 혼잣말해줘. 1문장.",
     "battle_win":    "[중얼거리기] 전투에서 이겼어! 현재 게임 상태 보면서 짧게 흥분해줘. 1문장.",
@@ -30,6 +29,14 @@ WHISPER_PROMPTS = {
     "episode_end":   "[중얼거리기] 이번 판 끝났어. 현재 게임 상태 보면서 짧게 회고해줘. 1문장.",
 }
 
+SLOW_RESPONSE_MESSAGES = [
+    "잠깐만, 생각 좀 하고 있어.. 💜",
+    "음.. 조금만 기다려줘 🤔",
+    "어, 나 지금 열심히 생각 중이야.. ⏳",
+    "잠깐, 좀 복잡한 질문이야.. 💜",
+    "생각보다 어려운 질문인데.. 잠깐만 ⏳",
+]
+
 
 async def main():
     from avatar.vtube_bridge import VTubeBridge
@@ -37,6 +44,7 @@ async def main():
     from tts.tts import text_to_speech
     from control.discord_bot import VTuberController
 
+    # ── 초기화 ──────────────────────────────────────
     bridge = VTubeBridge()
     await bridge.connect()
     print(f"[✅] VTube Studio 연결 완료")
@@ -44,26 +52,18 @@ async def main():
     topic = input("\n오늘 방송 주제 (없으면 엔터): ").strip()
     mode  = input("모드 선택 (1: 음성, 2: 채팅): ").strip()
 
-    print(f"[주제] {topic if topic else '자유 주제'}")
+    print(f"\n[주제] {topic if topic else '자유 주제'}")
     print(f"[모드] {'음성 입력' if mode == '1' else '채팅 입력'}")
-    print(f"\n{'='*40}")
-    print(f"  {NAME} 방송 시작!")
-    print(f"{'='*40}\n")
+    print(f"\n{'='*40}\n  {NAME} 방송 시작!\n{'='*40}\n")
 
-    main_loop        = asyncio.get_event_loop()
-    whisper_enabled  = True   # /whisper on/off 토글
-    last_event       = None   # 직전 이벤트 — 중복 방지
+    main_loop         = asyncio.get_event_loop()
+    whisper_enabled   = True
+    last_event        = None
+    last_whisper_time = 0.0
+    # ────────────────────────────────────────────────
 
-    SLOW_RESPONSE_MESSAGES = [
-        "잠깐만, 생각 좀 하고 있어.. 💜",
-        "음.. 조금만 기다려줘 🤔",
-        "어, 나 지금 열심히 생각 중이야.. ⏳",
-        "잠깐, 좀 복잡한 질문이야.. 💜",
-        "생각보다 어려운 질문인데.. 잠깐만 ⏳",
-    ]
-
+    # ── 중얼거리기 ───────────────────────────────────
     async def do_whisper(event: str):
-        """중얼거리기 — agent 통해서 짧게 반응"""
         prompt = WHISPER_PROMPTS.get(event)
         if not prompt:
             return
@@ -81,44 +81,77 @@ async def main():
                 timeout=30.0
             )
             if not result.get("is_fallback"):
+                print(f"[중얼거리기] {NAME}: {result['answer']}")
                 await asyncio.gather(
                     bridge.trigger_and_reset(result["vtube_expression"], duration=3.0),
                     text_to_speech(result["answer"])
                 )
-                print(f"[중얼거리기] {NAME}: {result['answer']}")
         except asyncio.TimeoutError:
             print(f"[중얼거리기] 타임아웃: {event}")
         except Exception as e:
             print(f"[중얼거리기] 오류: {e}")
+    # ────────────────────────────────────────────────
 
+    # ── 게임 이벤트 감지 루프 ────────────────────────
     async def game_event_loop():
-        """게임 상태 JSON 폴링 — 이벤트 감지 시 중얼거리기"""
-        nonlocal last_event, whisper_enabled
+        nonlocal last_event, whisper_enabled, last_whisper_time
+        last_cleared = None
         print("[Game] 이벤트 감지 루프 시작")
+
         while True:
-            await asyncio.sleep(2)  # 2초마다 폴링
-            if not whisper_enabled:
-                continue
+            await asyncio.sleep(2)
             try:
                 with open(GAME_STATE_PATH, "r") as f:
                     state = json.load(f)
+
+                # 클리어 알림
+                cleared = state.get("cleared", 0)
+                if last_cleared is None:
+                    last_cleared = cleared
+                elif cleared > last_cleared:
+                    last_cleared = cleared
+                    stage = state.get("stage", "?")
+                    zone  = state.get("zone", "?")
+                    ep    = state.get("episode", "?")
+                    print(f"[Game] 클리어 감지! {stage} {zone}구역 — 총 {cleared}클리어")
+                    if reader.controller and reader.controller.channel:
+                        embed = discord.Embed(title="🎉 던전 클리어!", color=discord.Color.green())
+                        embed.add_field(name="스테이지", value=f"{stage} {zone}구역", inline=True)
+                        embed.add_field(name="에피소드", value=f"{ep}판",             inline=True)
+                        embed.add_field(name="총 클리어", value=f"{cleared}회",       inline=True)
+                        asyncio.run_coroutine_threadsafe(
+                            reader.controller.channel.send(embed=embed),
+                            reader.controller.bot.loop
+                        )
+
+                # 중얼거리기
+                if not whisper_enabled:
+                    continue
+                now = main_loop.time()
+                if now - last_whisper_time < 300:
+                    continue
+
                 event = state.get("event", "")
-                if not event or event == last_event:
+                if not event or event == last_event or event not in WHISPER_PROMPTS:
                     continue
                 last_event = event
-                if event in WHISPER_PROMPTS:
-                    # 채팅 처리 중이면 잠깐 대기
-                    while hasattr(reader, 'is_busy') and reader.is_busy:
-                        await asyncio.sleep(1)
-                    asyncio.create_task(do_whisper(event))
-            except Exception as e:
-                pass  # 파일 없거나 파싱 실패면 조용히 넘김
 
+                while hasattr(reader, 'is_busy') and reader.is_busy:
+                    await asyncio.sleep(1)
+
+                last_whisper_time = main_loop.time()
+                asyncio.create_task(do_whisper(event))
+
+            except Exception:
+                pass
+    # ────────────────────────────────────────────────
+
+    # ── 채팅 처리 ────────────────────────────────────
     async def handle_chat(nickname: str, content: str):
-        # shake 키워드 감지
+        # shake
         if reader.shake_enabled and content.strip().lower() == "shake":
-            print(f"[흔들기] {nickname} shake!")
-            reactions = [
+            print(f"[흔들기] {nickname}")
+            msg = random.choice([
                 f"{nickname} 왜 이러는 거야.. 나 지금 방송 중이잖아 😔",
                 f"어지러워.. {nickname} 좀 그만해줄래 💜",
                 f"하.. {nickname} 나 지금 힘든데 😞",
@@ -126,15 +159,12 @@ async def main():
                 f"흔들리니까 이상해.. {nickname} 😢",
                 f"나 어지러워 {nickname}.. 조금만 쉬자 💜",
                 f"{nickname} 왜 그래.. 나 지금 열심히 하고 있었는데 😔",
-            ]
-            msg = random.choice(reactions)
+            ])
             await bridge.trigger_and_reset("Exp5 FaceShadow", duration=0.5)
-            await asyncio.gather(
-                bridge.shake(duration=2.0),
-                text_to_speech(msg)
-            )
+            await asyncio.gather(bridge.shake(duration=2.0), text_to_speech(msg))
             return
 
+        # user_input 포맷
         if content.startswith("[도네]"):
             user_input = f"{nickname}님이 도네이션 해주셨어요! {content[5:].strip()}"
         elif content == "[구독]":
@@ -144,6 +174,7 @@ async def main():
         else:
             user_input = f"{nickname}: {content}"
 
+        # agent 호출
         agent_task = main_loop.run_in_executor(
             None,
             lambda: agent.invoke({
@@ -156,14 +187,12 @@ async def main():
             })
         )
 
+        # 60초 경과 시 안내 멘트
         try:
-            result = await asyncio.wait_for(
-                asyncio.shield(agent_task),
-                timeout=60.0
-            )
+            result = await asyncio.wait_for(asyncio.shield(agent_task), timeout=60.0)
         except asyncio.TimeoutError:
             slow_msg = random.choice(SLOW_RESPONSE_MESSAGES)
-            print(f"[⏳] 응답 지연 60초 — 안내 멘트: {slow_msg}")
+            print(f"[⏳] 응답 지연 60초 — {slow_msg}")
             await text_to_speech(slow_msg)
             try:
                 result = await asyncio.wait_for(agent_task, timeout=120.0)
@@ -189,12 +218,13 @@ async def main():
                 daemon=True
             ).start()
         else:
-            print(f"[Memory] fallback 응답 — 저장 스킵")
+            print(f"[Memory] fallback — 저장 스킵")
 
         await asyncio.gather(
             bridge.trigger_and_reset(result["vtube_expression"], duration=5.0),
             text_to_speech(result["answer"])
         )
+    # ────────────────────────────────────────────────
 
     async def handle_subscription(nickname: str, gift: bool = False):
         msg = f"{nickname}님 구독 선물 감사합니다!" if gift else f"{nickname}님 구독 감사합니다!"
@@ -202,35 +232,32 @@ async def main():
         update_obs(msg)
         await text_to_speech(msg)
 
-    reader = ChzzkReader(
-        on_chat_callback=handle_chat,
-        on_subscription_callback=handle_subscription,
-        topic=topic
-    )
-
+    # ── 컨트롤러 & 봇 ────────────────────────────────
+    reader     = ChzzkReader(on_chat_callback=handle_chat, on_subscription_callback=handle_subscription, topic=topic)
     controller = VTuberController(reader=reader, main_loop=main_loop)
     controller.bridge = bridge
     reader.controller = controller
 
-    # whisper 토글 함수 주입
     def set_whisper(v: bool):
         nonlocal whisper_enabled
         whisper_enabled = v
+        print(f"[중얼거리기] {'ON' if v else 'OFF'}")
     controller.set_whisper = set_whisper
 
-    bot_thread = threading.Thread(target=controller.run, daemon=True)
-    bot_thread.start()
+    threading.Thread(target=controller.run, daemon=True).start()
     print("[✅] 디스코드 봇 시작!")
+    # ────────────────────────────────────────────────
 
     def handle_exit(signum, frame):
         update_obs("😴 가온이 자는 중...")
         os._exit(0)
 
-    signal.signal(signal.SIGINT, handle_exit)
+    signal.signal(signal.SIGINT,  handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
 
-    # 게임 이벤트 감지 루프 시작
+    # ── 실행 ─────────────────────────────────────────
     asyncio.create_task(game_event_loop())
+    print("[✅] 게임 이벤트 감지 시작!")
 
     if mode == "1":
         from voice.listener import voice_loop
@@ -239,6 +266,7 @@ async def main():
         await asyncio.Event().wait()
     else:
         await reader.start()
+    # ────────────────────────────────────────────────
 
 
 if __name__ == "__main__":
