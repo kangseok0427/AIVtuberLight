@@ -14,20 +14,7 @@ load_dotenv()
 NAME            = os.getenv("VTUBER_NAME")
 GAME_STATE_PATH = "/Users/lucas/MechanicoC/checkpoints/mechanico_status.json"
 
-WHISPER_PROMPTS = {
-    "battle_start":  "[중얼거리기] 전투 시작됐어. 현재 게임 상태 보면서 짧게 혼잣말해줘. 1문장.",
-    "battle_win":    "[중얼거리기] 전투에서 이겼어! 현재 게임 상태 보면서 짧게 흥분해줘. 1문장.",
-    "battle_lose":   "[중얼거리기] 전투에서 졌어.. 현재 게임 상태 보면서 짧게 속상해해줘. 1문장.",
-    "boss_appear":   "[중얼거리기] 보스가 나타났어! 현재 게임 상태 보면서 짧게 긴장해줘. 1문장.",
-    "party_ko":      "[중얼거리기] 파티원이 쓰러졌어.. 현재 게임 상태 보면서 짧게 걱정해줘. 1문장.",
-    "skill_used":    "[중얼거리기] 스킬을 썼어. 현재 게임 상태 보면서 짧게 반응해줘. 1문장.",
-    "critical":      "[중얼거리기] 크리티컬이 터졌어! 현재 게임 상태 보면서 짧게 흥분해줘. 1문장.",
-    "flee_success":  "[중얼거리기] 도망 성공했어! 현재 게임 상태 보면서 짧게 안도해줘. 1문장.",
-    "flee_fail":     "[중얼거리기] 도망 실패했어.. 현재 게임 상태 보면서 짧게 당황해줘. 1문장.",
-    "dungeon_clear": "[중얼거리기] 던전 클리어! 현재 게임 상태 보면서 짧게 자랑해줘. 1문장.",
-    "gameover":      "[중얼거리기] 게임오버야.. 현재 게임 상태 보면서 짧게 반응해줘. 1문장.",
-    "episode_end":   "[중얼거리기] 이번 판 끝났어. 현재 게임 상태 보면서 짧게 회고해줘. 1문장.",
-}
+WHISPER_INTERVAL_SEC = 300  # 5분마다 혼잣말
 
 SLOW_RESPONSE_MESSAGES = [
     "잠깐만, 생각 좀 하고 있어.. 💜",
@@ -49,29 +36,19 @@ async def main():
     await bridge.connect()
     print(f"[✅] VTube Studio 연결 완료")
 
-    topic = input("\n오늘 방송 주제 (없으면 엔터): ").strip()
-    mode  = input("모드 선택 (1: 음성, 2: 채팅): ").strip()
-
-    print(f"\n[주제] {topic if topic else '자유 주제'}")
-    print(f"[모드] {'음성 입력' if mode == '1' else '채팅 입력'}")
     print(f"\n{'='*40}\n  {NAME} 방송 시작!\n{'='*40}\n")
 
-    main_loop         = asyncio.get_event_loop()
-    whisper_enabled   = True
-    last_event        = None
-    last_whisper_time = 0.0
+    main_loop       = asyncio.get_event_loop()
+    whisper_enabled = True
     # ────────────────────────────────────────────────
 
-    # ── 중얼거리기 ───────────────────────────────────
-    async def do_whisper(event: str):
-        prompt = WHISPER_PROMPTS.get(event)
-        if not prompt:
-            return
-        print(f"[중얼거리기] 이벤트: {event}")
+    # ── 위스퍼 (혼잣말) ──────────────────────────────
+    async def do_whisper():
+        print("[위스퍼] 혼잣말 트리거")
         try:
             result = await asyncio.wait_for(
                 main_loop.run_in_executor(None, lambda: agent.invoke({
-                    "user_input":       prompt,
+                    "user_input":       "[위스퍼] 지금 떠오르는 생각이나 느낀 점을 짧게 혼잣말로 말해줘.",
                     "messages":         [],
                     "emotion":          "",
                     "vtube_expression": None,
@@ -81,20 +58,29 @@ async def main():
                 timeout=30.0
             )
             if not result.get("is_fallback"):
-                print(f"[중얼거리기] {NAME}: {result['answer']}")
+                print(f"[위스퍼] {NAME}: {result['answer']}")
                 await asyncio.gather(
                     bridge.trigger_and_reset(result["vtube_expression"], duration=3.0),
                     text_to_speech(result["answer"])
                 )
         except asyncio.TimeoutError:
-            print(f"[중얼거리기] 타임아웃: {event}")
+            print("[위스퍼] 타임아웃")
         except Exception as e:
-            print(f"[중얼거리기] 오류: {e}")
+            print(f"[위스퍼] 오류: {e}")
+
+    async def whisper_loop():
+        print("[위스퍼] 루프 시작 (5분 간격)")
+        while True:
+            await asyncio.sleep(WHISPER_INTERVAL_SEC)
+            if not whisper_enabled:
+                continue
+            while hasattr(reader, 'is_busy') and reader.is_busy:
+                await asyncio.sleep(1)
+            asyncio.create_task(do_whisper())
     # ────────────────────────────────────────────────
 
-    # ── 게임 이벤트 감지 루프 ────────────────────────
+    # ── 게임 이벤트 감지 루프 (클리어 알림 전용) ──────
     async def game_event_loop():
-        nonlocal last_event, whisper_enabled, last_whisper_time
         last_cleared = None
         print("[Game] 이벤트 감지 루프 시작")
 
@@ -104,7 +90,6 @@ async def main():
                 with open(GAME_STATE_PATH, "r") as f:
                     state = json.load(f)
 
-                # 클리어 알림
                 cleared = state.get("cleared", 0)
                 if last_cleared is None:
                     last_cleared = cleared
@@ -123,25 +108,6 @@ async def main():
                             reader.controller.channel.send(embed=embed),
                             reader.controller.bot.loop
                         )
-
-                # 중얼거리기
-                if not whisper_enabled:
-                    continue
-                now = main_loop.time()
-                if now - last_whisper_time < 300:
-                    continue
-
-                event = state.get("event", "")
-                if not event or event == last_event or event not in WHISPER_PROMPTS:
-                    continue
-                last_event = event
-
-                while hasattr(reader, 'is_busy') and reader.is_busy:
-                    await asyncio.sleep(1)
-
-                last_whisper_time = main_loop.time()
-                asyncio.create_task(do_whisper(event))
-
             except Exception:
                 pass
     # ────────────────────────────────────────────────
@@ -233,7 +199,7 @@ async def main():
         await text_to_speech(msg)
 
     # ── 컨트롤러 & 봇 ────────────────────────────────
-    reader     = ChzzkReader(on_chat_callback=handle_chat, on_subscription_callback=handle_subscription, topic=topic)
+    reader     = ChzzkReader(on_chat_callback=handle_chat, on_subscription_callback=handle_subscription, topic="")
     controller = VTuberController(reader=reader, main_loop=main_loop)
     controller.bridge = bridge
     reader.controller = controller
@@ -241,7 +207,7 @@ async def main():
     def set_whisper(v: bool):
         nonlocal whisper_enabled
         whisper_enabled = v
-        print(f"[중얼거리기] {'ON' if v else 'OFF'}")
+        print(f"[위스퍼] {'ON' if v else 'OFF'}")
     controller.set_whisper = set_whisper
 
     threading.Thread(target=controller.run, daemon=True).start()
@@ -258,14 +224,10 @@ async def main():
     # ── 실행 ─────────────────────────────────────────
     asyncio.create_task(game_event_loop())
     print("[✅] 게임 이벤트 감지 시작!")
+    asyncio.create_task(whisper_loop())
+    print("[✅] 위스퍼(혼잣말) 루프 시작!")
 
-    if mode == "1":
-        from voice.listener import voice_loop
-        asyncio.create_task(voice_loop(handle_chat, name="개발자"))
-        print("[✅] 음성 모드 시작!")
-        await asyncio.Event().wait()
-    else:
-        await reader.start()
+    await reader.start()
     # ────────────────────────────────────────────────
 
 

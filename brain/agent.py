@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 from brain.llm_config import get_think_llm, get_answer_llm, get_think_llm_with_tools
 
-from brain.tools import SearchTool, MemoryTool, CodeReaderTool, EternalReturnTool
+from brain.tools import SearchTool, MemoryTool, CodeReaderTool
 from tts.tts import text_to_speech
 
 load_dotenv()
@@ -25,8 +25,7 @@ search_tool   = SearchTool().build()
 memory_tool   = MemoryTool()
 memory_search = memory_tool.build()
 code_reader   = CodeReaderTool().build()
-er_tool       = EternalReturnTool().build()
-tools         = [search_tool, memory_search, code_reader, er_tool]
+tools         = [search_tool, memory_search, code_reader]
 
 # LLM
 llm_think            = get_think_llm()
