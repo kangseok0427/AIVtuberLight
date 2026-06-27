@@ -1,10 +1,7 @@
 # brain/agent.py
 import os
 import re
-import asyncio
-import json
 import random
-import threading
 from dotenv import load_dotenv
 from typing import TypedDict, Literal, Annotated
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -20,7 +17,7 @@ load_dotenv()
 
 NAME = os.getenv("VTUBER_NAME")
 
-# 툴 인스턴스
+# 툴 인스턴스 — webinfection 툴 제거, 파이프라인으로 분리
 search_tool   = SearchTool().build()
 memory_tool   = MemoryTool()
 memory_search = memory_tool.build()
@@ -54,28 +51,7 @@ def _get_memory_context(limit: int) -> str:
 
 
 def load_game_context() -> str:
-    try:
-        with open("/Users/lucas/MechanicoC/checkpoints/mechanico_status.json", "r") as f:
-            state = json.load(f)
-        result = load_prompt("game.txt",
-            episode=state.get("episode", 0),
-            total_steps=state.get("total_steps", 0),
-            stage=state.get("stage", "?"),
-            zone=state.get("zone", 0),
-            cleared=state.get("cleared", 0),
-            gold=state.get("gold", 0),
-            party_alive=", ".join(state.get("party_alive", [])) or "없음",
-            party_ko=", ".join(state.get("party_ko", [])) or "없음",
-            loss=round(state.get("loss", 0), 4),
-            epsilon=round(state.get("epsilon", 1), 2),
-            avg_reward=round(state.get("avg_reward", 0), 3),
-            event=state.get("event", "없음"),
-        )
-        print(f"[Game] 컨텍스트 로드됨: ep={state.get('episode')} stage={state.get('stage')} event={state.get('event')}")
-        return result
-    except Exception as e:
-        print(f"[Game] 컨텍스트 로드 실패: {e}")
-        return ""
+    return ""
 
 
 class VTuberState(TypedDict):
@@ -118,7 +94,8 @@ def detect_emotion(answer: str) -> tuple[str, str]:
 
 def update_obs(text: str):
     try:
-        with open("obs/overlay.html", "r", encoding="utf-8") as f:
+        overlay_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "obs", "overlay.html")
+        with open(overlay_path, "r", encoding="utf-8") as f:
             overlay = f.read()
         updated = re.sub(
             r'<div id="message">.*?</div>',
@@ -126,8 +103,9 @@ def update_obs(text: str):
             overlay,
             flags=re.DOTALL
         )
-        with open("obs/overlay.html", "w", encoding="utf-8") as f:
+        with open(overlay_path, "w", encoding="utf-8") as f:
             f.write(updated)
+        print(f"[OBS] 오버레이 업데이트: {text[:20]}")
     except Exception as e:
         print(f"[OBS] 오버레이 업데이트 실패: {e}")
 
@@ -156,7 +134,7 @@ def answer_node(state: VTuberState) -> VTuberState:
     try:
         game_context = load_game_context()
         system = SystemMessage(
-            content=load_prompt("answer.txt", NAME=NAME) + "\n\n" + game_context
+            content=load_prompt("answer.txt", NAME=NAME) + ("\n\n" + game_context if game_context else "")
         )
 
         tool_results = ""
@@ -171,7 +149,7 @@ def answer_node(state: VTuberState) -> VTuberState:
                 break
 
         if tool_results:
-            user_content += f"\n\n[검색 결과]{tool_results}"
+            user_content += f"\n\n[툴 실행 결과]{tool_results}"
 
         user_content += _get_memory_context(limit=3)
 

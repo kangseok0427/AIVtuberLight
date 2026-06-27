@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 from langchain.tools import tool
 
-# 제외 목록 — IGNORE_DIRS에 통합
 IGNORE_DIRS = {
     ".git", "__pycache__", ".chroma",
     "node_modules", ".conda", "prompts"
@@ -11,31 +10,43 @@ IGNORE_DIRS = {
 IGNORE_FILES      = {".env", ".gitignore", ".DS_Store"}
 IGNORE_EXTENSIONS = {".pyc", ".pyo", ".png", ".jpg", ".mp3", ".wav"}
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent  # ai-vtuber/
+PROJECT_ROOT      = Path(__file__).parent.parent.parent
+WEBINFECTION_ROOT = Path("/Users/lucas/webinfection")
 
 
-def _collect_files() -> dict[str, str]:
-    """프로젝트 파일 전체 수집 → {상대경로: 내용}"""
+def _get_tree(root: Path, indent: int = 0) -> str:
+    result = ""
+    try:
+        entries = sorted(root.iterdir(), key=lambda p: (p.is_file(), p.name))
+        for entry in entries:
+            if entry.name in IGNORE_DIRS or entry.name in IGNORE_FILES:
+                continue
+            prefix = "  " * indent + ("📄 " if entry.is_file() else "📁 ")
+            result += f"{prefix}{entry.name}\n"
+            if entry.is_dir() and entry.name not in IGNORE_DIRS:
+                result += _get_tree(entry, indent + 1)
+    except Exception:
+        pass
+    return result
+
+
+def _collect_files(root: Path) -> dict[str, str]:
     files = {}
-    for path in PROJECT_ROOT.rglob("*"):
+    for path in root.rglob("*"):
         if not path.is_file():
             continue
-        # 제외 디렉토리 — 경로 어딘가에 포함되면 스킵
         if any(part in IGNORE_DIRS for part in path.parts):
             continue
-        # 제외 파일명 / 확장자
         if path.name in IGNORE_FILES:
             continue
         if path.suffix in IGNORE_EXTENSIONS:
             continue
         try:
             content = path.read_text(encoding="utf-8")
-            rel = str(path.relative_to(PROJECT_ROOT))
+            rel     = str(path.relative_to(root))
             files[rel] = content
         except Exception as e:
             print(f"[CodeReader] 파일 읽기 실패: {path} — {e}")
-            continue
-
     print(f"[CodeReader] 총 {len(files)}개 파일 수집 완료")
     return files
 
@@ -46,41 +57,67 @@ class CodeReaderTool:
         @tool
         def code_reader(query: str) -> str:
             """
-            가온이 자신의 코드 구조나 작동 방식을 설명할 때 사용.
-            시청자가 '너 어떻게 만들어졌어?', '이 기능 어떻게 돼?' 같은 질문을 할 때 호출.
+            가온이 자신의 코드 구조나 작동 방식, 또는 webinfection 게임 현재 코드를 확인할 때 사용.
+            webinfection 코드 작업 전 반드시 호출해서 현재 코드 파악할 것.
+            'webinfection', 'game.js', '게임 코드', '현재 파일' 키워드가 포함되면 webinfection 우선 탐색.
             """
             print(f"[CodeReader] 호출: '{query}'")
-            files = _collect_files()
+
+            wi_keywords = ["webinfection", "game.js", "게임 코드", "현재 파일", "게임 파일", "index.html"]
+            is_wi = any(kw in query.lower() for kw in wi_keywords)
+
+            # webinfection 쿼리면 game.js 우선 반환
+            if is_wi:
+                priority = ["src/game.js", "src/index.html", "src/style.css"]
+                result = ""
+                for p in priority:
+                    target = WEBINFECTION_ROOT / p
+                    if target.exists():
+                        try:
+                            content = target.read_text(encoding="utf-8")
+                            lines   = content.splitlines()
+                            preview = "\n".join(lines[:150])
+                            if len(lines) > 150:
+                                preview += f"\n... (총 {len(lines)}줄)"
+                            result += f"\n[{p}]\n{preview}\n"
+                        except Exception as e:
+                            print(f"[CodeReader] 읽기 실패: {p} — {e}")
+                print(f"[CodeReader] webinfection 파일 반환")
+                return result.strip() if result else "webinfection 파일 없음"
+
+            # 가온이 프로젝트
+            root  = PROJECT_ROOT
+            files = _collect_files(root)
 
             if not files:
-                return "코드 파일을 찾을 수 없어."
+                tree = _get_tree(root)
+                return f"[디렉토리 구조]\n{tree}"
 
-            # 키워드로 관련 파일 필터링
+            if any(kw in query.lower() for kw in ["구조", "파일 목록", "tree", "어떻게 생겼"]):
+                tree = _get_tree(root)
+                return f"[가온이 프로젝트 구조]\n{tree}"
+
             keywords = query.lower().split()
             relevant = {}
             for rel, content in files.items():
-                # 경로 매칭은 2점, 내용 매칭은 등장 횟수만큼 점수
                 path_score    = sum(kw in rel.lower() for kw in keywords) * 2
                 content_score = sum(content.lower().count(kw) for kw in keywords)
                 score = path_score + content_score
                 if score > 0:
                     relevant[rel] = (score, content)
 
-            # 관련 파일 없으면 구조만 반환
             if not relevant:
-                structure = "\n".join(files.keys())
-                print(f"[CodeReader] 관련 파일 없음 — 구조 반환")
-                return f"[프로젝트 구조]\n{structure}"
+                tree = _get_tree(root)
+                return f"[프로젝트 구조]\n{tree}"
 
-            # 점수 높은 파일 최대 2개만
             top = sorted(relevant.items(), key=lambda x: x[1][0], reverse=True)[:2]
             print(f"[CodeReader] 반환 파일: {[rel for rel, _ in top]}")
 
             result = ""
             for rel, (_, content) in top:
                 lines   = content.splitlines()
-                preview = "\n".join(lines[:100])
-                if len(lines) > 100:
+                preview = "\n".join(lines[:50])
+                if len(lines) > 50:
                     preview += f"\n... (총 {len(lines)}줄)"
                 result += f"\n[{rel}]\n{preview}\n"
 
